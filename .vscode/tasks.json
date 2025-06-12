@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Smoke test QBWC endpoint",
+      "type": "shell",
+      "command": "Invoke-WebRequest -Uri http://localhost:8000/qbwc -Method Get -Headers @{'Content-Type'='text/xml'} -UseBasicParsing | Select-Object -ExpandProperty Content -First 1000",
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    }
+  ]
+}

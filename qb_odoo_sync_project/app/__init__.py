@@ -10,7 +10,6 @@ from spyne.protocol.soap import Soap11
 
 from .logging_config import setup_logging
 from .services.qbwc_service import QBWCService
-from .soap_patches import PatchedSoap11
 
 def create_app():
     """
@@ -25,45 +24,33 @@ def create_app():
     # Create Flask application
     flask_app = Flask(__name__)
     flask_app.config["DEBUG"] = True  # FLASK_DEBUG was True by default
-    
-    # Initialize Spyne SOAP application
+      # Initialize Spyne SOAP application
     soap_app = Application(
         [QBWCService],
         tns='http://developer.intuit.com/',
         name='QBWC',
-        in_protocol=PatchedSoap11(validator='lxml'),
+        in_protocol=Soap11(validator='lxml'),
         out_protocol=Soap11()
     )
-    
-    # Create WSGI application wrapper
-    wsgi_app = WsgiApplication(soap_app)
-    
-    # Define the main SOAP endpoint
-    @flask_app.route("/quickbooks", methods=['POST'])  # SOAP_PATH was '/quickbooks'
-    def soap_endpoint():
-        """Handle SOAP requests from QuickBooks Web Connector."""
-        def start_response_wrapper(status, headers, exc_info=None):
-            """WSGI start_response wrapper - handled by Flask Response."""
+
+    # Create a WSGI application for Spyne
+    spyne_wsgi_app = WsgiApplication(soap_app)    # Define the main SOAP endpoint at /quickbooks
+    @flask_app.route("/quickbooks", methods=['POST', 'GET'])
+    def qbwc_soap_endpoint():
+        """Handle SOAP requests and WSDL generation for QBWC."""
+        def start_response(status, headers, exc_info=None):
             pass
-        
-        # Get response from Spyne WSGI application
-        response_iterable = wsgi_app(request.environ, start_response_wrapper)
+
+        response_iterable = spyne_wsgi_app(request.environ, start_response)
         response_data = b"".join(response_iterable)
-        
         return Response(response_data, mimetype='text/xml')
-    
-    # Add a GET endpoint for /quickbooks to confirm route registration
-    @flask_app.route("/quickbooks", methods=['GET'])
-    def quickbooks_get():
-        return "QBWC SOAP endpoint is registered. Use POST for SOAP requests.", 200
 
     # Health check endpoint
     @flask_app.route('/health', methods=['GET'])
     def health_check():
         """Simple health check endpoint."""
         return {"status": "healthy", "service": "QB Odoo Sync"}, 200
-    
-    # Root endpoint with service info
+      # Root endpoint with service info
     @flask_app.route('/', methods=['GET'])
     def service_info():
         """Provide basic service information."""
@@ -74,5 +61,6 @@ def create_app():
         }, 200
     
     # Log startup
-    print("[INFO] Flask app created. /quickbooks POST and GET endpoints registered.")
+    print("[INFO] Flask app created. /quickbooks POST and GET endpoint registered for Spyne.")
+    print(f"[INFO] Flask URL Map: {flask_app.url_map}")
     return flask_app

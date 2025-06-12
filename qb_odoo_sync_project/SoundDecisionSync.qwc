@@ -2,8 +2,7 @@
 <QBWCXML>
   <AppName>SoundDecisionSync</AppName>
   <AppID></AppID>
-  <AppDescription>Sync journal entries from QuickBooks to Odoo via local Python server</AppDescription>
-  <AppURL>http://localhost:5000/quickbooks</AppURL>
+  <AppDescription>Sync journal entries from QuickBooks to Odoo via local Python server</AppDescription>    <AppURL>http://localhost:5000/quickbooks</AppURL>
   <AppSupport>http://localhost/support</AppSupport>
   <QBType>QBFS</QBType>
   <UserName>admin</UserName>
