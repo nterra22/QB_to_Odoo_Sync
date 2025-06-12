@@ -72,3 +72,23 @@
 2025-06-12 15:04:45,135 - INFO - FILE - qb_odoo_sync - run - main - 27 - Using Odoo URL: https://nterra-sounddecision-odoo.odoo.com
 2025-06-12 15:04:45,150 - INFO - FILE - qb_odoo_sync - run - main - 28 - Flask DEBUG mode: True
 2025-06-12 15:04:45,151 - WARNING - FILE - qb_odoo_sync - run - main - 35 - WARNING: Using default/placeholder Odoo API Key. Set ODOO_API_KEY environment variable in production!
+2025-06-12 16:03:47,824 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:10,024 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:10,314 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 26 - Data directory ensured: c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data
+2025-06-12 16:04:10,325 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 39 - Successfully loaded 168 account mappings from c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data\account_crosswalk.json
+2025-06-12 16:04:42,716 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:42,946 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 26 - Data directory ensured: c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data
+2025-06-12 16:04:42,946 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 39 - Successfully loaded 168 account mappings from c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data\account_crosswalk.json
+2025-06-12 16:04:43,016 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:43,056 - INFO - FILE - qb_odoo_sync - run - main - 26 - QuickBooks sync server starting on http://0.0.0.0:5000/quickbooks
+2025-06-12 16:04:43,056 - INFO - FILE - qb_odoo_sync - run - main - 27 - Using Odoo URL: https://nterra-sounddecision-odoo.odoo.com
+2025-06-12 16:04:43,066 - INFO - FILE - qb_odoo_sync - run - main - 28 - Flask DEBUG mode: True
+2025-06-12 16:04:43,069 - WARNING - FILE - qb_odoo_sync - run - main - 35 - WARNING: Using default/placeholder Odoo API Key. Set ODOO_API_KEY environment variable in production!
+2025-06-12 16:04:43,797 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:43,996 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 26 - Data directory ensured: c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data
+2025-06-12 16:04:43,996 - INFO - FILE - qb_odoo_sync - data_loader - load_account_crosswalk - 39 - Successfully loaded 168 account mappings from c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\data\account_crosswalk.json
+2025-06-12 16:04:44,066 - INFO - FILE - qb_odoo_sync - logging_config - setup_logging - 48 - File logging initialized. Debug messages will be written to c:\SD Code Files\QB Odoo Sync\QB_to_Odoo_Sync\qb_odoo_sync_project\logs\qbwc_debug.log
+2025-06-12 16:04:44,086 - INFO - FILE - qb_odoo_sync - run - main - 26 - QuickBooks sync server starting on http://0.0.0.0:5000/quickbooks
+2025-06-12 16:04:44,086 - INFO - FILE - qb_odoo_sync - run - main - 27 - Using Odoo URL: https://nterra-sounddecision-odoo.odoo.com
+2025-06-12 16:04:44,086 - INFO - FILE - qb_odoo_sync - run - main - 28 - Flask DEBUG mode: True
+2025-06-12 16:04:44,086 - WARNING - FILE - qb_odoo_sync - run - main - 35 - WARNING: Using default/placeholder Odoo API Key. Set ODOO_API_KEY environment variable in production!
