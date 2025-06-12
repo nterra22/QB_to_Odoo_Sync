@@ -11,8 +11,12 @@ import requests
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ..logging_config import logger
-from ..config import ODOO_URL, ODOO_API_KEY, ODOO_REQUEST_TIMEOUT
 from ..utils.data_loader import get_account_map
+
+# Hardcoded Odoo credentials
+ODOO_URL = "https://nterra-sounddecision-odoo.odoo.com"
+ODOO_API_KEY = "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703"
+ODOO_REQUEST_TIMEOUT = 30  # Hardcoded request timeout (in seconds)
 
 def _odoo_rpc_call(model: str, method: str, args: List = None, domain: List = None, 
                    fields: List[str] = None, limit: int = None, **kwargs) -> Optional[Any]:

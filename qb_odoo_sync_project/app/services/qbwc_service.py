@@ -10,7 +10,9 @@ import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional
 
-from ..config import QBWC_USERNAME, QBWC_PASSWORD, MAX_JOURNAL_ENTRIES_PER_REQUEST
+# Remove import of MAX_JOURNAL_ENTRIES_PER_REQUEST from config
+MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
+
 from .odoo_service import (
     ensure_partner_exists, 
     ensure_product_exists, 
@@ -20,6 +22,10 @@ from .odoo_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Hardcoded QBWC credentials
+QBWC_USERNAME = "admin"
+QBWC_PASSWORD = "odoo123"
 
 # QBWC Service State (for iterator management)
 qbwc_session_state: Dict[str, Dict[str, Any]] = {}
@@ -78,14 +84,14 @@ class QBWCService(ServiceBase):
         # Build XML request
         if iterator_id:
             # Continue existing query
-            xml_request = self._build_continue_request(
-                qbXMLMajorVers, qbXMLMinorVers, iterator_id
+            xml_request = QBWCService._build_continue_request(
+                QBWCService, qbXMLMajorVers, qbXMLMinorVers, iterator_id
             )
             logger.info(f"Continuing GeneralJournalQueryRq with iteratorID: {iterator_id}")
         else:
             # Start new query
-            xml_request = self._build_initial_request(
-                qbXMLMajorVers, qbXMLMinorVers, today_date
+            xml_request = QBWCService._build_initial_request(
+                QBWCService, qbXMLMajorVers, qbXMLMinorVers, today_date
             )
             logger.info(f"Starting new GeneralJournalQueryRq for date: {today_date}")
         
@@ -148,7 +154,7 @@ class QBWCService(ServiceBase):
             return "0"
 
         try:
-            return self._process_qb_response(ticket, response, session_data)
+            return QBWCService._process_qb_response(ctx, ticket, response, session_data)
         except Exception as e:
             error_msg = f"Error processing QB response: {e}"
             logger.exception(error_msg)

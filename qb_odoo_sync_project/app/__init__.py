@@ -8,7 +8,6 @@ from spyne import Application
 from spyne.server.wsgi import WsgiApplication
 from spyne.protocol.soap import Soap11
 
-from .config import FLASK_DEBUG, SOAP_PATH
 from .logging_config import setup_logging
 from .services.qbwc_service import QBWCService
 from .soap_patches import PatchedSoap11
@@ -25,7 +24,7 @@ def create_app():
     
     # Create Flask application
     flask_app = Flask(__name__)
-    flask_app.config["DEBUG"] = FLASK_DEBUG
+    flask_app.config["DEBUG"] = True  # FLASK_DEBUG was True by default
     
     # Initialize Spyne SOAP application
     soap_app = Application(
@@ -40,7 +39,7 @@ def create_app():
     wsgi_app = WsgiApplication(soap_app)
     
     # Define the main SOAP endpoint
-    @flask_app.route(SOAP_PATH, methods=['POST'])
+    @flask_app.route("/quickbooks", methods=['POST'])  # SOAP_PATH was '/quickbooks'
     def soap_endpoint():
         """Handle SOAP requests from QuickBooks Web Connector."""
         def start_response_wrapper(status, headers, exc_info=None):
@@ -53,6 +52,11 @@ def create_app():
         
         return Response(response_data, mimetype='text/xml')
     
+    # Add a GET endpoint for /quickbooks to confirm route registration
+    @flask_app.route("/quickbooks", methods=['GET'])
+    def quickbooks_get():
+        return "QBWC SOAP endpoint is registered. Use POST for SOAP requests.", 200
+
     # Health check endpoint
     @flask_app.route('/health', methods=['GET'])
     def health_check():
@@ -65,8 +69,10 @@ def create_app():
         """Provide basic service information."""
         return {
             "service": "QuickBooks Odoo Sync Server",
-            "soap_endpoint": SOAP_PATH,
+            "soap_endpoint": "/quickbooks",
             "status": "running"
         }, 200
     
+    # Log startup
+    print("[INFO] Flask app created. /quickbooks POST and GET endpoints registered.")
     return flask_app

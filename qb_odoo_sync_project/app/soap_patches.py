@@ -37,18 +37,22 @@ class LxmlFriendlyXmlDocument:
             
         Returns:
             Parsed XML document object
-            
-        Raises:
+              Raises:
             ValueError: If XML parsing fails after attempting fixes
         """
         logger.debug("LXML_PATCH: parse_xml_string called")
         logger.debug(f"LXML_PATCH: Input type: {type(xml_string)}")
         
+        # Handle generator objects by converting to string
+        if hasattr(xml_string, '__iter__') and not isinstance(xml_string, (str, bytes)):
+            logger.debug("LXML_PATCH: Input is a generator/iterator, converting to string")
+            xml_string = ''.join(xml_string)
+        
         if isinstance(xml_string, bytes):
             logger.debug("LXML_PATCH: Input is bytes, converting to string")
             xml_string = xml_string.decode('utf-8', errors='replace')
         
-        logger.debug(f"LXML_PATCH: XML content preview: {xml_string[:200]}...")
+        logger.debug(f"LXML_PATCH: XML content preview: {xml_string[:200] if len(xml_string) > 200 else xml_string}...")
         
         try:
             # First attempt: try parsing as-is

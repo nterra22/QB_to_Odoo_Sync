@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 from ..logging_config import logger
-from ..config import ACCOUNT_CROSSWALK_FILE_PATH
+
+# Hardcoded path for the account crosswalk file
+ACCOUNT_CROSSWALK_FILE_PATH = "../data/account_crosswalk.json"
 
 # Global variable to cache crosswalk data
 _account_crosswalk_data = None

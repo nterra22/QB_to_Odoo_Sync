@@ -6,7 +6,11 @@ XML processing, and Odoo API calls.
 """
 import logging
 import os
-from .config import LOG_DIR, LOG_FILE_PATH
+from pathlib import Path
+
+# Hardcoded log directory and file path
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_FILE_PATH = LOG_DIR / "qbwc_debug.log"
 
 def setup_logging():
     """

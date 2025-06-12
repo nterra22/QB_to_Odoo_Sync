@@ -12,7 +12,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app import create_app
-from app.config import ODOO_URL, ODOO_API_KEY, SERVER_HOST, SERVER_PORT, FLASK_DEBUG
+
+# Hardcoded configuration values
+ODOO_URL = "https://nterra-sounddecision-odoo.odoo.com"
+ODOO_API_KEY = "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703"
+SERVER_HOST = "0.0.0.0"
+SERVER_PORT = 5000
+FLASK_DEBUG = True
 
 def main():
     """Main application entry point."""
