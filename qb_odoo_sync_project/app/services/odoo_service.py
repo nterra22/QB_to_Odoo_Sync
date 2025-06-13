@@ -81,6 +81,7 @@ def _odoo_rpc_call(model: str, method: str, args: List = None, domain: List = No
             logger.error(f"Odoo API error ({model}.{method}): {response_json['error']}")
             return None
             
+        logger.info(f"Successfully connected to Odoo API and called {model}.{method}.")
         return response_json.get("result")
         
     except requests.exceptions.Timeout:
