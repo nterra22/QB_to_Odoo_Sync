@@ -70,42 +70,146 @@ class QBWCService(ServiceBase):
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         logger.debug("Method sendRequestXML called")
-        """
-        Generate QBXML request for QuickBooks.
-        
-        Returns:
-            QBXML request string or empty string if no request needed
-        """
-        logger.info(f"QBWC Service: sendRequestXML called. Ticket: {ticket}")
-        
-        # Validate session
         session_data = qbwc_session_state.get(ticket)
         if not session_data:
             logger.error(f"sendRequestXML: Invalid ticket {ticket}")
-            return ""
+            return "" # Return empty string if no valid session
+
+        # Get current date in YYYY-MM-DD format
+        today_date_str = datetime.now().strftime('%Y-%m-%d')
         
-        # For now, return empty string (no requests)
-        return ""
+        xml_request = ""
+
+        # Check for active invoice iterator
+        invoice_iterator_id = session_data.get("invoice_iterator_id")
+
+        if invoice_iterator_id:
+            logger.info(f"Continuing InvoiceQueryRq with iteratorID: {invoice_iterator_id}")
+            xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbXMLMajorVers}.{qbXMLMinorVers}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceQueryRq requestID="2" iterator="Continue" iteratorID="{invoice_iterator_id}">
+      <MaxReturned>100</MaxReturned> 
+    </InvoiceQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+        else:
+            # No active iterator, or previous query type completed. Start new InvoiceQuery.
+            logger.info(f"Starting new InvoiceQueryRq for date: {today_date_str}")
+            session_data["current_query_type"] = "Invoice" # Mark current query type
+            xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbXMLMajorVers}.{qbXMLMinorVers}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceQueryRq requestID="1">
+      <TxnDateRangeFilter>
+        <FromTxnDate>{today_date_str}</FromTxnDate>
+        <ToTxnDate>{today_date_str}</ToTxnDate>
+      </TxnDateRangeFilter>
+      <IncludeLineItems>true</IncludeLineItems>
+      <OwnerID>0</OwnerID> 
+    </InvoiceQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            # Clear any previous iterator ID for safety if we are starting a new query type
+            if "invoice_iterator_id" in session_data:
+                del session_data["invoice_iterator_id"]
+        
+        logger.debug(f"Sending QBXML request: {xml_request}")
+        return xml_request
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def receiveResponseXML(self, ticket, response, hresult, message):
         logger.debug("Method receiveResponseXML called")
-        """
-        Process QBXML response from QuickBooks.
-        
-        Returns:
-            Percentage complete as string
-        """
         logger.info(f"QBWC Service: receiveResponseXML called. Ticket: {ticket}")
-        
-        # Validate session
+        logger.debug(f"Received QBXML response: {response}") # Log the full response for debugging
+
         session_data = qbwc_session_state.get(ticket)
         if not session_data:
             logger.error(f"receiveResponseXML: Invalid ticket {ticket}")
-            return "0"
-        
-        # For now, return 100% complete
-        return "100"
+            return "0" # Error or no progress
+
+        current_query = session_data.get("current_query_type")
+        progress = 0
+
+        if current_query == "Invoice":
+            try:
+                if not response:
+                    logger.warning("Received empty response for InvoiceQuery.")
+                    # Consider this an end of this step or an error
+                    if "invoice_iterator_id" in session_data:
+                        del session_data["invoice_iterator_id"]
+                    if "current_query_type" in session_data:
+                        del session_data["current_query_type"]
+                    return "100" # Or some error code if appropriate
+
+                root = ET.fromstring(response)
+                invoice_query_rs = root.find('.//InvoiceQueryRs')
+
+                if invoice_query_rs is not None:
+                    status_code = invoice_query_rs.get('statusCode', 'unknown')
+                    status_message = invoice_query_rs.get('statusMessage', 'N/A')
+                    logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
+
+                    if status_code == '0': # Success
+                        # Process invoices here if needed in the future
+                        # For now, just log them
+                        invoices = invoice_query_rs.findall('.//InvoiceRet')
+                        logger.info(f"Received {len(invoices)} invoices in this response.")
+                        for inv in invoices:
+                            txn_id = inv.find('TxnID')
+                            ref_number = inv.find('RefNumber')
+                            logger.info(f"  Invoice TxnID: {txn_id.text if txn_id is not None else 'N/A'}, RefNumber: {ref_number.text if ref_number is not None else 'N/A'}")
+
+                        iterator_id = invoice_query_rs.get("iteratorID")
+                        iterator_remaining_count_str = invoice_query_rs.get("iteratorRemainingCount")
+                        
+                        if iterator_id and iterator_remaining_count_str and int(iterator_remaining_count_str) > 0:
+                            session_data["invoice_iterator_id"] = iterator_id
+                            # Simple progress: 50% if iterating, 100% if done with this batch but more might come.
+                            # A more accurate progress would require knowing total count beforehand.
+                            progress = 50 
+                            logger.info(f"Invoice iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count_str}")
+                        else:
+                            logger.info("Invoice iteration complete or no iterator.")
+                            if "invoice_iterator_id" in session_data:
+                                del session_data["invoice_iterator_id"]
+                            # We could clear current_query_type here or set it to the next one
+                            # For this test, we'll assume we are done with Invoices for now.
+                            if "current_query_type" in session_data:
+                                del session_data["current_query_type"]
+                            progress = 100
+                    else:
+                        logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
+                        session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
+                        if "invoice_iterator_id" in session_data:
+                            del session_data["invoice_iterator_id"]
+                        if "current_query_type" in session_data:
+                            del session_data["current_query_type"]
+                        progress = 100 # Indicate this step is done, but with an error logged
+                else:
+                    logger.warning("Could not find InvoiceQueryRs in the response.")
+                    # Clear iterator and query type as we don't know the state
+                    if "invoice_iterator_id" in session_data:
+                        del session_data["invoice_iterator_id"]
+                    if "current_query_type" in session_data:
+                        del session_data["current_query_type"]
+                    progress = 100 # Or an error state
+            except ET.ParseError as e:
+                logger.error(f"Error parsing XML response: {e}")
+                session_data["last_error"] = "XML Parse Error in receiveResponseXML"
+                if "invoice_iterator_id" in session_data:
+                    del session_data["invoice_iterator_id"]
+                if "current_query_type" in session_data:
+                    del session_data["current_query_type"]
+                return "0" # Error
+        else:
+            logger.info("Received response for an unknown or completed query type.")
+            # If no current_query_type is set, or it's not "Invoice", assume 100% done for whatever previous step was.
+            progress = 100
+            
+        return str(progress)
 
     @rpc(Unicode, _returns=Unicode)
     def getLastError(self, ticket):
