@@ -15,7 +15,9 @@ from app import create_app
 
 # Hardcoded configuration values
 ODOO_URL = "https://nterra-sounddecision-odoo.odoo.com"
-ODOO_API_KEY = "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703"
+ODOO_DB = os.getenv("ODOO_DB", "nterra-sounddecision-odoo") 
+ODOO_USER_ID = os.getenv("ODOO_USER_ID") # This can remain as is, or be hardcoded if needed
+ODOO_API_KEY = "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703" # Directly use the provided API key
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 5000  # Back to original working port
 FLASK_DEBUG = True
@@ -32,16 +34,6 @@ def main():
         logger.info(f"QuickBooks sync server starting on http://{SERVER_HOST}:{SERVER_PORT}/quickbooks")
         logger.info(f"Using Odoo URL: {ODOO_URL}")
         logger.info(f"Flask DEBUG mode: {FLASK_DEBUG}")
-        
-        # Security warning for production deployments
-        if ODOO_API_KEY and (
-            "your_odoo_api_key" in ODOO_API_KEY.lower() or 
-            ODOO_API_KEY == "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703"
-        ):
-            logger.warning(
-                "WARNING: Using default/placeholder Odoo API Key. "
-                "Set ODOO_API_KEY environment variable in production!"
-            )
         
         # Run the Flask development server
         flask_app.run(
