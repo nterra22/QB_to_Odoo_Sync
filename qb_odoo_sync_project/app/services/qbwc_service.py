@@ -24,6 +24,10 @@ VENDOR_QUERY = "VendorQuery"
 INVOICE_QUERY = "InvoiceQuery"
 BILL_QUERY = "BillQuery"
 RECEIVEPAYMENT_QUERY = "ReceivePaymentQuery"
+CREDITMEMO_QUERY = "CreditMemoQuery" # New
+SALESORDER_QUERY = "SalesOrderQuery" # New
+PURCHASEORDER_QUERY = "PurchaseOrderQuery" # New
+JOURNALENTRY_QUERY = "JournalEntryQuery" # New
 # ITEM_QUERY = "ItemQuery" # Example for future expansion
 
 # Import Odoo service functions that will be used
@@ -31,11 +35,15 @@ from .odoo_service import (
     ensure_partner_exists, 
     ensure_product_exists, 
     ensure_account_exists,
-    # create_odoo_journal_entry, # Keep if direct journal entries are still a use case
     ensure_journal_exists,
-    create_or_update_odoo_invoice, # New function to be created in odoo_service.py
-    create_or_update_odoo_bill,    # New function
-    create_or_update_odoo_payment  # New function
+    create_or_update_odoo_invoice,
+    create_or_update_odoo_bill,
+    create_or_update_odoo_payment,
+    create_or_update_odoo_partner, # Added import
+    create_or_update_odoo_credit_memo, # New
+    create_or_update_odoo_sales_order, # New
+    create_or_update_odoo_purchase_order, # New
+    create_or_update_odoo_journal_entry # New
 )
 
 logger = logging.getLogger(__name__)
@@ -136,6 +144,58 @@ class QBWCService(ServiceBase):
                             "ToTxnDate": today_date_str
                         }
                     }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": CREDITMEMO_QUERY, # New
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": SALESORDER_QUERY, # New
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": PURCHASEORDER_QUERY, # New
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": JOURNALENTRY_QUERY, # New
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true" # JournalEntry lines are crucial
+                    }
                 }
                 # TODO: Add tasks for SalesOrderQuery, PurchaseOrderQuery etc.
                 # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
@@ -187,6 +247,22 @@ class QBWCService(ServiceBase):
         if current_task["type"] == QB_QUERY:
             entity = current_task["entity"]
             iterator_id = current_task.get("iteratorID")
+            qbxml_version = session_data.get("qbxml_version", "13.0") # Default to 13.0 if not set
+
+            # Helper to build TxnDateRangeFilter XML
+            def get_txn_date_filter_xml(params):
+                if "TxnDateRangeFilter" in params:
+                    return f'''<TxnDateRangeFilter>
+        <FromTxnDate>{params["TxnDateRangeFilter"]["FromTxnDate"]}</FromTxnDate>
+        <ToTxnDate>{params["TxnDateRangeFilter"]["ToTxnDate"]}</ToTxnDate>
+      </TxnDateRangeFilter>'''
+                return ""
+
+            # Helper to build IncludeLineItems XML
+            def get_include_line_items_xml(params):
+                if "IncludeLineItems" in params:
+                    return f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>'''
+                return ""
 
             if entity == CUSTOMER_QUERY:
                 if iterator_id:
@@ -342,6 +418,121 @@ class QBWCService(ServiceBase):
       <IncludeLineItems>true</IncludeLineItems> <!-- To see which invoices are paid -->
       <MaxReturned>50</MaxReturned>
     </ReceivePaymentQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+
+            elif entity == CREDITMEMO_QUERY: # New
+                params = current_task.get("params", {})
+                txn_date_filter_xml = get_txn_date_filter_xml(params)
+                include_line_items_xml = get_include_line_items_xml(params)
+                if iterator_id:
+                    logger.info(f"Continuing CreditMemoQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <CreditMemoQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>50</MaxReturned>
+    </CreditMemoQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new CreditMemoQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <CreditMemoQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      <MaxReturned>50</MaxReturned>
+    </CreditMemoQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            elif entity == SALESORDER_QUERY: # New
+                params = current_task.get("params", {})
+                txn_date_filter_xml = get_txn_date_filter_xml(params)
+                include_line_items_xml = get_include_line_items_xml(params)
+                if iterator_id:
+                    logger.info(f"Continuing SalesOrderQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <SalesOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>50</MaxReturned>
+    </SalesOrderQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new SalesOrderQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <SalesOrderQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      <MaxReturned>50</MaxReturned>
+    </SalesOrderQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            elif entity == PURCHASEORDER_QUERY: # New
+                params = current_task.get("params", {})
+                txn_date_filter_xml = get_txn_date_filter_xml(params)
+                include_line_items_xml = get_include_line_items_xml(params)
+                if iterator_id:
+                    logger.info(f"Continuing PurchaseOrderQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <PurchaseOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>50</MaxReturned>
+    </PurchaseOrderQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new PurchaseOrderQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <PurchaseOrderQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      <MaxReturned>50</MaxReturned>
+    </PurchaseOrderQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            elif entity == JOURNALENTRY_QUERY: # New
+                params = current_task.get("params", {})
+                txn_date_filter_xml = get_txn_date_filter_xml(params)
+                # IncludeLineItems is typically true for Journal Entries by default in QB, but explicit is good.
+                include_line_items_xml = f'''<IncludeLineItems>true</IncludeLineItems>'''
+
+                if iterator_id:
+                    logger.info(f"Continuing JournalEntryQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <JournalEntryQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> 
+    </JournalEntryQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new JournalEntryQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <JournalEntryQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> 
+    </JournalEntryQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
 
@@ -764,6 +955,182 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
                         progress = 100
 
+                elif entity == CREDITMEMO_QUERY: # New
+                    credit_memo_query_rs = root.find('.//CreditMemoQueryRs')
+                    if credit_memo_query_rs is not None:
+                        status_code = credit_memo_query_rs.get('statusCode', 'unknown')
+                        status_message = credit_memo_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"CreditMemoQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0': # Success
+                            credit_memos = credit_memo_query_rs.findall('.//CreditMemoRet')
+                            logger.info(f"Received {len(credit_memos)} credit memos in this response.")
+                            for cm_xml in credit_memos:
+                                qb_cm_data = _extract_transaction_data(cm_xml, "CreditMemo") # Generic extractor
+                                logger.info(f"  Processing Credit Memo TxnID: {qb_cm_data.get('qb_txn_id')}, Ref: {qb_cm_data.get('ref_number')}")
+                                try:
+                                    odoo_cm_id = create_or_update_odoo_credit_memo(qb_cm_data)
+                                    if odoo_cm_id:
+                                        logger.info(f"    Successfully processed Credit Memo {qb_cm_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_cm_id}).")
+                                    else:
+                                        logger.warning(f"    Credit Memo {qb_cm_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Credit Memo {qb_cm_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            
+
+                            iterator_id = credit_memo_query_rs.get("iteratorID")
+                            iterator_remaining_count = credit_memo_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"CreditMemoQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find CreditMemoQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+                
+                elif entity == SALESORDER_QUERY: # New
+                    sales_order_query_rs = root.find('.//SalesOrderQueryRs')
+                    if sales_order_query_rs is not None:
+                        status_code = sales_order_query_rs.get('statusCode', 'unknown')
+                        status_message = sales_order_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"SalesOrderQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0': 
+                            sales_orders = sales_order_query_rs.findall('.//SalesOrderRet')
+                            logger.info(f"Received {len(sales_orders)} sales orders in this response.")
+                            for so_xml in sales_orders:
+                                qb_so_data = _extract_transaction_data(so_xml, "SalesOrder")
+                                logger.info(f"  Processing Sales Order TxnID: {qb_so_data.get('qb_txn_id')}, Ref: {qb_so_data.get('ref_number')}")
+                                try:
+                                    odoo_so_id = create_or_update_odoo_sales_order(qb_so_data)
+                                    if odoo_so_id:
+                                        logger.info(f"    Successfully processed Sales Order {qb_so_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_so_id}).")
+                                    else:
+                                        logger.warning(f"    Sales Order {qb_so_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Sales Order {qb_so_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            
+
+                            iterator_id = sales_order_query_rs.get("iteratorID")
+                            iterator_remaining_count = sales_order_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"SalesOrderQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find SalesOrderQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                elif entity == PURCHASEORDER_QUERY: # New
+                    purchase_order_query_rs = root.find('.//PurchaseOrderQueryRs')
+                    if purchase_order_query_rs is not None:
+                        status_code = purchase_order_query_rs.get('statusCode', 'unknown')
+                        status_message = purchase_order_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"PurchaseOrderQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0':
+                            purchase_orders = purchase_order_query_rs.findall('.//PurchaseOrderRet')
+                            logger.info(f"Received {len(purchase_orders)} purchase orders in this response.")
+                            for po_xml in purchase_orders:
+                                qb_po_data = _extract_transaction_data(po_xml, "PurchaseOrder")
+                                logger.info(f"  Processing Purchase Order TxnID: {qb_po_data.get('qb_txn_id')}, Ref: {qb_po_data.get('ref_number')}")
+                                try:
+                                    odoo_po_id = create_or_update_odoo_purchase_order(qb_po_data)
+                                    if odoo_po_id:
+                                        logger.info(f"    Successfully processed Purchase Order {qb_po_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_po_id}).")
+                                    else:
+                                        logger.warning(f"    Purchase Order {qb_po_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Purchase Order {qb_po_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            
+
+                            iterator_id = purchase_order_query_rs.get("iteratorID")
+                            iterator_remaining_count = purchase_order_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"PurchaseOrderQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find PurchaseOrderQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                elif entity == JOURNALENTRY_QUERY: # New
+                    journal_entry_query_rs = root.find('.//JournalEntryQueryRs')
+                    if journal_entry_query_rs is not None:
+                        status_code = journal_entry_query_rs.get('statusCode', 'unknown')
+                        status_message = journal_entry_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"JournalEntryQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0':
+                            journal_entries = journal_entry_query_rs.findall('.//JournalEntryRet')
+                            logger.info(f"Received {len(journal_entries)} journal entries in this response.")
+                            for je_xml in journal_entries:
+                                qb_je_data = _extract_journal_entry_data(je_xml) # Specific extractor for JEs
+                                logger.info(f"  Processing Journal Entry TxnID: {qb_je_data.get('qb_txn_id')}, Ref: {qb_je_data.get('ref_number')}")
+                                try:
+                                    odoo_je_id = create_or_update_odoo_journal_entry(qb_je_data)
+                                    if odoo_je_id:
+                                        logger.info(f"    Successfully processed Journal Entry {qb_je_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_je_id}).")
+                                    else:
+                                        logger.warning(f"    Journal Entry {qb_je_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Journal Entry {qb_je_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            
+
+                            iterator_id = journal_entry_query_rs.get("iteratorID")
+                            iterator_remaining_count = journal_entry_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"JournalEntryQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find JournalEntryQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
                 # Add processing for other QB_QUERY entity responses here (e.g. ItemQueryRs)
             
             # Add processing for QB_ADD_RS, QB_MOD_RS etc. in the future
@@ -856,4 +1223,121 @@ class QBWCService(ServiceBase):
         logger.debug("Method clientVersion called")
         logger.info(f"QBWC Service: clientVersion called with version: {strVersion}")
         # Return empty string to indicate version is supported
+        return ""
+
+# New generic transaction data extractor
+def _extract_transaction_data(txn_xml_element: ET.Element, txn_type: str) -> Dict[str, Any]:
+    data = {
+        "qb_txn_id": _extract_text(txn_xml_element, 'TxnID'),
+        "ref_number": _extract_text(txn_xml_element, 'RefNumber'),
+        "txn_date": _extract_text(txn_xml_element, 'TxnDate'),
+        "memo": _extract_text(txn_xml_element, 'Memo'),
+        "qbd_object_type": txn_type,
+        "lines": []
+    }
+
+    if txn_type in ["Invoice", "CreditMemo", "SalesOrder"]: # Customer-based transactions
+        data["customer_name"] = _extract_text(txn_xml_element, 'CustomerRef/FullName')
+        data["due_date"] = _extract_text(txn_xml_element, 'DueDate') # Common for Invoices, CreditMemos
+        data["subtotal"] = float(_extract_text(txn_xml_element, 'Subtotal') or 0.0)
+        # Add more fields specific to these types as needed (e.g., SalesTaxTotal, AppliedAmount for Invoice)
+
+    elif txn_type in ["Bill", "PurchaseOrder"]: # Vendor-based transactions
+        data["vendor_name"] = _extract_text(txn_xml_element, 'VendorRef/FullName')
+        data["due_date"] = _extract_text(txn_xml_element, 'DueDate') # Common for Bills
+        data["amount_due"] = float(_extract_text(txn_xml_element, 'AmountDue') or 0.0) # For Bill
+
+    # Line item extraction (simplified, needs to be specific per transaction type)
+    # This is a basic structure; specific line types (InvoiceLineRet, CreditMemoLineRet, etc.) need detailed parsing
+    
+    line_ret_name_map = {
+        "Invoice": "InvoiceLineRet",
+        "CreditMemo": "CreditMemoLineRet",
+        "SalesOrder": "SalesOrderLineRet",
+        "PurchaseOrder": "PurchaseOrderLineRet",
+        # Bills have ExpenseLineRet and ItemLineRet, handled separately if needed or generalized
+    }
+
+    line_ret_name = line_ret_name_map.get(txn_type)
+
+    if line_ret_name:
+        for line_xml in txn_xml_element.findall(f'.//{line_ret_name}'):
+            line_data = {
+                "item_name": _extract_text(line_xml, 'ItemRef/FullName'),
+                "description": _extract_text(line_xml, 'Desc'),
+                "quantity": float(_extract_text(line_xml, 'Quantity') or 0.0),
+                "rate": float(_extract_text(line_xml, 'Rate') or 0.0), # Price level for sales, Cost for POs
+                "amount": float(_extract_text(line_xml, 'Amount') or 0.0),
+                # Add other common line fields: SalesTaxCodeRef, ClassRef, etc.
+            }
+            if txn_type == "PurchaseOrder": # POs use Cost instead of Rate for unit price
+                line_data["cost"] = float(_extract_text(line_xml, 'Cost') or 0.0)
+
+            data["lines"].append(line_data)
+    
+    # Special handling for Bill lines (Expense and Item)
+    if txn_type == "Bill":
+        data["expense_lines"] = []
+        data["item_lines"] = []
+        for line_xml in txn_xml_element.findall('.//ExpenseLineRet'):
+            data["expense_lines"].append({
+                "account_name": _extract_text(line_xml, 'AccountRef/FullName'),
+                "amount": float(_extract_text(line_xml, 'Amount') or 0.0),
+                "memo": _extract_text(line_xml, 'Memo'),
+            })
+        for line_xml in txn_xml_element.findall('.//ItemLineRet'):
+             data["item_lines"].append({
+                "item_name": _extract_text(line_xml, 'ItemRef/FullName'),
+                "description": _extract_text(line_xml, 'Desc'),
+                "quantity": float(_extract_text(line_xml, 'Quantity') or 0.0),
+                "cost": float(_extract_text(line_xml, 'Cost') or 0.0),
+                "amount": float(_extract_text(line_xml, 'Amount') or 0.0),
+            })
+
+
+    logger.debug(f"Extracted QB {txn_type} Data for TxnID {data.get('qb_txn_id')}: {data}")
+    return data
+
+# New specific extractor for Journal Entries
+def _extract_journal_entry_data(je_xml_element: ET.Element) -> Dict[str, Any]:
+    data = {
+        "qb_txn_id": _extract_text(je_xml_element, 'TxnID'),
+        "ref_number": _extract_text(je_xml_element, 'RefNumber'),
+        "txn_date": _extract_text(je_xml_element, 'TxnDate'),
+        "memo": _extract_text(je_xml_element, 'Memo'), # Top-level memo
+        "qbd_object_type": "JournalEntry",
+        "lines": []
+    }
+
+    for line_xml in je_xml_element.findall('.//JournalCreditLine'):
+        line_data = {
+            "type": "Credit",
+            "account_name": _extract_text(line_xml, 'AccountRef/FullName'),
+            "amount": float(_extract_text(line_xml, 'Amount') or 0.0),
+            "memo": _extract_text(line_xml, 'Memo'), # Line-level memo
+            "entity_name": _extract_text(line_xml, 'EntityRef/FullName'), # Customer, Vendor, Employee, Other Name
+            # Add ClassRef if needed
+        }
+        data["lines"].append(line_data)
+
+    for line_xml in je_xml_element.findall('.//JournalDebitLine'):
+        line_data = {
+            "type": "Debit",
+            "account_name": _extract_text(line_xml, 'AccountRef/FullName'),
+            "amount": float(_extract_text(line_xml, 'Amount') or 0.0),
+            "memo": _extract_text(line_xml, 'Memo'), # Line-level memo
+            "entity_name": _extract_text(line_xml, 'EntityRef/FullName'),
+        }
+        data["lines"].append(line_data)
+    
+    logger.debug(f"Extracted QB Journal Entry Data for TxnID {data.get('qb_txn_id')}: {data}")
+    return data
+
+# Helper function to extract text from XML element, with logging
+def _extract_text(xml_element: ET.Element, xpath: str) -> str:
+    try:
+        result = xml_element.findtext(xpath)
+        return result.strip() if result else ""
+    except Exception as e:
+        logger.warning(f"Error extracting text for xpath '{xpath}': {e}")
         return ""

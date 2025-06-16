@@ -133,15 +133,91 @@
         { "qbd_field": "DueDate", "odoo_field": "invoice_date_due"},
         { "qbd_field": "TermsRef_ListID", "odoo_field": "invoice_payment_term_id"},
         { "qbd_field": "Memo", "odoo_field": "narration" },
-        { "qbd_field": "BillLine.ItemRef_ListID", "odoo_field": "invoice_line_ids.product_id"},
-        { "qbd_field": "BillLine.Desc", "odoo_field": "invoice_line_ids.name"},
-        { "qbd_field": "BillLine.Quantity", "odoo_field": "invoice_line_ids.quantity"},
-        { "qbd_field": "BillLine.Cost", "odoo_field": "invoice_line_ids.price_unit"},
-        { "qbd_field": "BillLine.Amount", "odoo_field": "invoice_line_ids.price_subtotal"},
-        { "qbd_field": "BillLine.AccountRef_ListID", "odoo_field": "invoice_line_ids.account_id"}
+        { "qbd_field": "BillItemLine.ItemRef_ListID", "odoo_field": "invoice_line_ids.product_id"},
+        { "qbd_field": "BillItemLine.Desc", "odoo_field": "invoice_line_ids.name"},
+        { "qbd_field": "BillItemLine.Quantity", "odoo_field": "invoice_line_ids.quantity"},
+        { "qbd_field": "BillItemLine.Cost", "odoo_field": "invoice_line_ids.price_unit"},
+        { "qbd_field": "BillItemLine.Amount", "odoo_field": "invoice_line_ids.price_subtotal"},
+        { "qbd_field": "BillExpenseLine.AccountRef_ListID", "odoo_field": "invoice_line_ids.account_id"},
+        { "qbd_field": "BillExpenseLine.Memo", "odoo_field": "invoice_line_ids.name"},
+        { "qbd_field": "BillExpenseLine.Amount", "odoo_field": "invoice_line_ids.price_subtotal"}
       ],
       "default_values": {
         "move_type": "in_invoice",
+        "journal_id": null
+      }
+    },
+    "CreditMemos": {
+      "qbd_object": "CreditMemo",
+      "odoo_model": "account.move",
+      "fields": [
+        { "qbd_field": "TxnID", "odoo_field": "external_id"},
+        { "qbd_field": "CustomerRef_ListID", "odoo_field": "partner_id"},
+        { "qbd_field": "RefNumber", "odoo_field": "name"},
+        { "qbd_field": "TxnDate", "odoo_field": "invoice_date"},
+        { "qbd_field": "Memo", "odoo_field": "narration" },
+        { "qbd_field": "CreditMemoLine.ItemRef_ListID", "odoo_field": "invoice_line_ids.product_id"},
+        { "qbd_field": "CreditMemoLine.Desc", "odoo_field": "invoice_line_ids.name"},
+        { "qbd_field": "CreditMemoLine.Quantity", "odoo_field": "invoice_line_ids.quantity"},
+        { "qbd_field": "CreditMemoLine.Rate", "odoo_field": "invoice_line_ids.price_unit"},
+        { "qbd_field": "CreditMemoLine.Amount", "odoo_field": "invoice_line_ids.price_subtotal"},
+        { "qbd_field": "CreditMemoLine.SalesTaxCodeRef_ListID", "odoo_field": "invoice_line_ids.tax_ids"}
+      ],
+      "default_values": {
+        "move_type": "out_refund",
+        "journal_id": null
+      }
+    },
+    "SalesOrders": {
+      "qbd_object": "SalesOrder",
+      "odoo_model": "sale.order",
+      "fields": [
+        { "qbd_field": "TxnID", "odoo_field": "external_id"},
+        { "qbd_field": "CustomerRef_ListID", "odoo_field": "partner_id"},
+        { "qbd_field": "RefNumber", "odoo_field": "name"},
+        { "qbd_field": "TxnDate", "odoo_field": "date_order"},
+        { "qbd_field": "Memo", "odoo_field": "note" },
+        { "qbd_field": "SalesOrderLine.ItemRef_ListID", "odoo_field": "order_line.product_id"},
+        { "qbd_field": "SalesOrderLine.Desc", "odoo_field": "order_line.name"},
+        { "qbd_field": "SalesOrderLine.Quantity", "odoo_field": "order_line.product_uom_qty"},
+        { "qbd_field": "SalesOrderLine.Rate", "odoo_field": "order_line.price_unit"},
+        { "qbd_field": "SalesOrderLine.Amount", "odoo_field": "order_line.price_subtotal"},
+        { "qbd_field": "SalesOrderLine.SalesTaxCodeRef_ListID", "odoo_field": "order_line.tax_id"}
+      ],
+      "default_values": {}
+    },
+    "PurchaseOrders": {
+      "qbd_object": "PurchaseOrder",
+      "odoo_model": "purchase.order",
+      "fields": [
+        { "qbd_field": "TxnID", "odoo_field": "external_id"},
+        { "qbd_field": "VendorRef_ListID", "odoo_field": "partner_id"},
+        { "qbd_field": "RefNumber", "odoo_field": "name"},
+        { "qbd_field": "TxnDate", "odoo_field": "date_order"},
+        { "qbd_field": "Memo", "odoo_field": "notes" },
+        { "qbd_field": "PurchaseOrderLine.ItemRef_ListID", "odoo_field": "order_line.product_id"},
+        { "qbd_field": "PurchaseOrderLine.Desc", "odoo_field": "order_line.name"},
+        { "qbd_field": "PurchaseOrderLine.Quantity", "odoo_field": "order_line.product_qty"},
+        { "qbd_field": "PurchaseOrderLine.Rate", "odoo_field": "order_line.price_unit"},
+        { "qbd_field": "PurchaseOrderLine.Amount", "odoo_field": "order_line.price_subtotal"}
+      ],
+      "default_values": {}
+    },
+    "JournalEntries": {
+      "qbd_object": "JournalEntry",
+      "odoo_model": "account.move",
+      "fields": [
+        { "qbd_field": "TxnID", "odoo_field": "external_id"},
+        { "qbd_field": "RefNumber", "odoo_field": "ref"},
+        { "qbd_field": "TxnDate", "odoo_field": "date"},
+        { "qbd_field": "Memo", "odoo_field": "narration" },
+        { "qbd_field": "JournalLine.AccountRef_ListID", "odoo_field": "line_ids.account_id"},
+        { "qbd_field": "JournalLine.Amount", "odoo_field": "line_ids.amount_currency" },
+        { "qbd_field": "JournalLine.Memo", "odoo_field": "line_ids.name"},
+        { "qbd_field": "JournalLine.EntityRef_ListID", "odoo_field": "line_ids.partner_id"}
+      ],
+      "default_values": {
+        "move_type": "entry",
         "journal_id": null
       }
     }

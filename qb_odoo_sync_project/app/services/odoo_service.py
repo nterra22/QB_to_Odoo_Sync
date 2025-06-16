@@ -12,7 +12,8 @@ import requests # Keep for potential future use or other integrations
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ..logging_config import logger
-from ..utils.data_loader import get_account_map, get_field_mapping
+# Ensure this path is correct based on your project structure
+from ..utils.data_loader import load_json_data, get_field_mapping_for_entity 
 
 # --- Odoo Connection Configuration ---
 ODOO_URL = "https://nterra22-sounddecision-odoo-develop-20178686.dev.odoo.com"
@@ -21,6 +22,9 @@ ODOO_USERNAME = "it@wadic.net" # Make sure this is the correct username for the 
 ODOO_API_KEY = "e8188dcec4b36dbc1e89e4da17b989c7aae8e568"
 ODOO_REQUEST_TIMEOUT = 60  # Increased timeout
 # --- End Odoo Connection Configuration ---
+
+_cached_uid = None
+FIELD_MAPPING = None # Added: Initialize FIELD_MAPPING
 
 def _get_odoo_uid() -> Optional[int]:
     """Authenticates with Odoo and returns the UID."""
@@ -39,8 +43,6 @@ def _get_odoo_uid() -> Optional[int]:
     except Exception as e:
         logger.error(f"Unexpected error during Odoo login: {e}")
         return None
-
-_cached_uid = None
 
 def get_odoo_uid_cached() -> Optional[int]:
     """Returns a cached Odoo UID, authenticating if necessary."""
@@ -68,7 +70,7 @@ def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict:
         return None
 
     try:
-        models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object', allow_none=True)
+        models_proxy = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object', allow_none=True)
         
         params_for_execute_kw = [ODOO_DB, uid, ODOO_API_KEY, model, method]
         
@@ -79,32 +81,28 @@ def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict:
         
         if kwargs_dict is not None:
             params_for_execute_kw.append(kwargs_dict)
-        # else: # No need for empty dict if no kwargs_dict, execute_kw handles it
-            # params_for_execute_kw.append({})
-
 
         logger.debug(f"Odoo XML-RPC call: model='{model}', method='{method}', args='{args_list}', kwargs='{kwargs_dict}'")
         
-        result = models.execute_kw(*params_for_execute_kw)
+        result = models_proxy.execute_kw(*params_for_execute_kw)
         
         logger.debug(f"Odoo RPC call to {model}.{method} successful. Result snippet: {str(result)[:200]}...")
         return result
     except xmlrpc.client.Fault as e:
         logger.error(f"Odoo RPC Fault for {model}.{method}: {e.faultCode} - {e.faultString}")
-        # Clear cached UID in case of authentication/session issue
         global _cached_uid
-        if "AccessDenied" in e.faultString or "Session expired" in e.faultString: # Heuristic
+        if "AccessDenied" in e.faultString or "Session expired" in e.faultString or "Invalid user credentials" in e.faultString:
              _cached_uid = None
              logger.info("Cleared cached Odoo UID due to potential session/access issue.")
         return None
-    except requests.exceptions.RequestException as e: # Catch network errors
+    except requests.exceptions.RequestException as e: 
         logger.error(f"Network request exception during Odoo RPC call for {model}.{method}: {e}")
         return None
-    except Exception as e: # Catch any other unexpected errors
-        logger.error(f"Unexpected error during Odoo RPC call for {model}.{method}: {e}")
+    except Exception as e: 
+        logger.error(f"Unexpected error during Odoo RPC call for {model}.{method}: {e}", exc_info=True)
         return None
 
-# --- Partner (Customer/Vendor) Management ---
+# --- Partner (Customer/Vendor) Management ---\r
 def find_partner_by_ref(ref: str, company_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Finds a partner by their 'ref' (QuickBooks ListID)."""
     domain = [('ref', '=', ref)]
@@ -332,6 +330,58 @@ def ensure_product_exists(model_code: str, description: str,
         # For now, return None as the specific product.product variant wasn't confirmed.
         return None
 
+# --- Account Crosswalk Helper ---
+_account_crosswalk_data = None
+
+def load_account_crosswalk():
+    global _account_crosswalk_data
+    if _account_crosswalk_data is None: # Load only once
+        _account_crosswalk_data = load_json_data("account_crosswalk.json")
+        if _account_crosswalk_data is None: 
+            logger.error("Account crosswalk data (account_crosswalk.json) could not be loaded or is empty.")
+            _account_crosswalk_data = [] 
+        elif not isinstance(_account_crosswalk_data, list):
+             logger.error(f"Account crosswalk data is not in the expected list format. Loaded: {_account_crosswalk_data}")
+             _account_crosswalk_data = [] 
+        else:
+            logger.info("Account crosswalk data loaded successfully.")
+
+def get_account_map(qb_account_full_name: str) -> Optional[Dict[str, Any]]:
+    global _account_crosswalk_data
+    if _account_crosswalk_data is None:
+        load_account_crosswalk()
+
+    if not isinstance(_account_crosswalk_data, list):
+        logger.error("Account crosswalk data is not a list, cannot search.")
+        return None
+
+    for mapping in _account_crosswalk_data:
+        if isinstance(mapping, dict) and mapping.get("qb_account_full_name") == qb_account_full_name:
+            return {
+                "code": mapping.get("odoo_code"),
+                "name": mapping.get("odoo_name"),
+                "type": mapping.get("odoo_type"), 
+                "reconcile": mapping.get("odoo_reconcile", False)
+            }
+    return None
+
+load_account_crosswalk()
+
+# --- Field Mapping Loader ---
+def load_field_mapping():
+    global FIELD_MAPPING
+    if FIELD_MAPPING is None:
+        FIELD_MAPPING = load_json_data("field_mapping.json")
+        if FIELD_MAPPING is None:
+            logger.error("Field mapping data (field_mapping.json) could not be loaded or is empty.")
+            FIELD_MAPPING = {} # Initialize as empty dict if loading fails
+        else:
+            logger.info("Field mapping data loaded successfully.")
+
+load_field_mapping() # Added: Load field mapping at startup
+# --- End Account Crosswalk Helper ---
+
+
 def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional[str] = None) -> Optional[int]:
     """
     Ensure an account exists in Odoo based on QB account crosswalk.
@@ -341,34 +391,33 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
         account_type_hint: Optional Odoo account type (e.g. 'asset_receivable', 'income', 'expense') 
                            to help if crosswalk is missing type.
                            
+
     Returns:
         Account ID or None on error
     """
     if not qb_account_full_name:
-        logger.warning("Empty QB account name provided")
+        logger.warning("Empty QB account name provided to ensure_account_exists")
         return None
         
-    # Get mapping from crosswalk
     odoo_account_map = get_account_map(qb_account_full_name)
     if not odoo_account_map:
         logger.warning(f"QuickBooks account '{qb_account_full_name}' not found in crosswalk. Account type hint: {account_type_hint}")
-        # TODO: Potentially try to create based on name and hint if allowed, or require crosswalk entry
         return None
 
     odoo_account_code = odoo_account_map.get("code")
     odoo_account_name = odoo_account_map.get("name")
-    odoo_account_type_str = odoo_account_map.get("type") or account_type_hint # Use hint if crosswalk type is missing
+    # 'type' from crosswalk is the name of an account.account.type record
+    odoo_account_type_name = odoo_account_map.get("type") or account_type_hint 
 
     if not odoo_account_code:
         logger.warning(f"Odoo account code missing for QB account '{qb_account_full_name}' in crosswalk")
         return None
 
-    # Search for existing account
     accounts = _odoo_rpc_call(
-        "account.account",
-        "search_read",
-        args_list=[["code", "=", odoo_account_code]],
-        kwargs_dict={"fields": ["id", "name"], "limit": 1}
+        model="account.account",
+        method="search_read",
+        args_list=[[("code", "=", odoo_account_code)]], # Corrected
+        kwargs_dict={"fields": ["id", "name"], "limit": 1} # Corrected
     )
 
     if accounts:
@@ -376,32 +425,29 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
         logger.info(f"Odoo Account '{odoo_account_code} - {accounts[0]['name']}' found with ID: {account_id}")
         return account_id
     
-    # Account not found, attempt to create
     logger.info(f"Odoo Account with code '{odoo_account_code}' not found. Attempting to create")
     
-    # Find account type
-    if not odoo_account_type_str:
-        logger.error(f"Account type not specified for QB account '{qb_account_full_name}'")
+    if not odoo_account_type_name:
+        logger.error(f"Odoo account type name not specified for QB account '{qb_account_full_name}' (from crosswalk or hint). Cannot create account.")
         return None
         
     account_types = _odoo_rpc_call(
-        "account.account.type",
-        "search_read",
-        args_list=[["name", "ilike", odoo_account_type_str]],
-        kwargs_dict={"fields": ["id", "name"], "limit": 1}
+        model="account.account.type",
+        method="search_read",
+        args_list=[[("name", "ilike", odoo_account_type_name)]], # Corrected
+        kwargs_dict={"fields": ["id", "name"], "limit": 1} # Corrected
     )
 
     if not account_types:
-        logger.error(f"Odoo account type '{odoo_account_type_str}' not found. Cannot create account")
+        logger.error(f"Odoo account type '{odoo_account_type_name}' not found. Cannot create account '{odoo_account_code}'")
         return None
 
     user_type_id = account_types[0]["id"]
-    logger.info(f"Found account type '{account_types[0]['name']}' with ID {user_type_id}")
+    logger.info(f"Found Odoo account type '{account_types[0]['name']}' with ID {user_type_id} for creating account '{odoo_account_code}'")
 
-    # Create account
     account_data = {
         "code": odoo_account_code,
-        "name": odoo_account_name or qb_account_full_name,
+        "name": odoo_account_name or qb_account_full_name, 
         "user_type_id": user_type_id,
         "reconcile": odoo_account_map.get("reconcile", False)
     }
@@ -409,36 +455,47 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
     new_account_id = _odoo_rpc_call("account.account", "create", args_list=[account_data])
     if new_account_id:
         logger.info(f"Odoo Account '{odoo_account_code}' created with ID: {new_account_id}")
+    else:
+        logger.error(f"Failed to create Odoo account '{odoo_account_code}'.")
     
     return new_account_id
 
-def ensure_journal_exists(journal_name: str) -> Optional[int]:
+def ensure_journal_exists(journal_name: str, journal_type_list: Optional[List[str]] = None) -> Optional[int]:
     """
-    Find an Odoo journal by name.
+    Find an Odoo journal by name, optionally filtered by a list of types.
     
     Args:
-        journal_name: Journal name to search for
+        journal_name: Journal name to search for.
+        journal_type_list: Optional list of journal types (e.g., ['general', 'sale', 'purchase']).
+                           If None, defaults to ['general', 'sale', 'purchase', 'bank', 'cash'].
         
     Returns:
         Journal ID or None if not found
     """
     if not journal_name:
-        logger.warning("Empty journal name provided")
+        logger.warning("Empty journal name provided to ensure_journal_exists")
         return None
+    
+    domain = [("name", "=", journal_name)] # Corrected
+    
+    if journal_type_list:
+        domain.append(("type", "in", journal_type_list)) # Corrected
+    else:
+        domain.append(("type", "in", ["general", "sale", "purchase", "bank", "cash"])) # Corrected
         
     journals = _odoo_rpc_call(
-        "account.journal",
-        "search_read",
-        args_list=[["name", "=", journal_name], ["type", "in", ["general", "sale", "purchase"]]],
-        kwargs_dict={"fields": ["id", "name"], "limit": 1}
+        model="account.journal",
+        method="search_read",
+        args_list=[domain], # Corrected
+        kwargs_dict={"fields": ["id", "name", "type"], "limit": 1} # Corrected
     )
     
     if journals:
         journal_id = journals[0]["id"]
-        logger.info(f"Odoo Journal '{journal_name}' found with ID: {journal_id}")
+        logger.info(f"Odoo Journal '{journal_name}' (Type: {journals[0]['type']}) found with ID: {journal_id}")
         return journal_id
     
-    logger.warning(f"Odoo Journal '{journal_name}' not found")
+    logger.warning(f"Odoo Journal '{journal_name}' (Types searched: {journal_type_list or 'default'}) not found")
     return None
 
 def create_odoo_journal_entry(entry_data: Dict[str, Any]) -> Optional[int]:
@@ -506,7 +563,7 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
     logger.info(f"Processing QB Invoice: Ref {qb_invoice_data.get('ref_number')}, Customer: {qb_invoice_data.get('customer_name')}, TxnID: {qb_invoice_data.get('qb_txn_id')}")
     logger.debug(f"Full QB Invoice data: {qb_invoice_data}")
 
-    invoice_mapping = get_field_mapping("Invoices")
+    invoice_mapping = FIELD_MAPPING.get("entities", {}).get("Invoices")
     if not invoice_mapping:
         logger.error("Invoice mapping not found in field_mapping.json. Cannot process invoice.")
         return None
@@ -721,7 +778,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
     logger.info(f"Processing QB Bill: Ref {qb_bill_data.get('ref_number')}, Vendor: {qb_bill_data.get('vendor_name')}, TxnID: {qb_bill_data.get('qb_txn_id')}")
     logger.debug(f"Full QB Bill data: {qb_bill_data}")
 
-    bill_mapping = get_field_mapping("Bills")
+    bill_mapping = FIELD_MAPPING.get("entities", {}).get("Bills")
     if not bill_mapping:
         logger.error("Bill mapping not found in field_mapping.json. Cannot process bill.")
         return None
@@ -756,7 +813,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
             return None
 
     # Prepare bill lines
-    bill_lines_for_odoo = []
+    bill_lines_for_odoo = [] # Moved initialization to here
 
     # Process Item Lines from QB Bill
     for qb_line in qb_bill_data.get("item_lines", []):
@@ -815,6 +872,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
             # "tax_ids": [] # Placeholder for tax mapping
         }
         bill_lines_for_odoo.append((0, 0, line_data))
+
 
     # Process Expense Lines from QB Bill
     for qb_line in qb_bill_data.get("expense_lines", []):
@@ -904,6 +962,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
         )
         if success:
             logger.info(f"Successfully updated Odoo bill ID: {existing_bill_id}")
+            # Optionally, re-post the bill if its state changed to 'draft'
             # current_state = _odoo_rpc_call("account.move", "read", args=[existing_bill_id], kwargs_rpc={"fields": ["state"]})
             # if current_state and current_state[0]['state'] == 'draft':
             #    _odoo_rpc_call(model="account.move", method="action_post", args=[[existing_bill_id]])
@@ -968,37 +1027,3 @@ def create_or_update_odoo_payment(qb_payment_data: Dict[str, Any]) -> Optional[i
     # 2. Reconciling it against the Odoo invoices that correspond to qb_payment_data["applied_to_txns"].
     #    - This requires finding the Odoo invoice IDs based on the qb_invoice_txn_id.
     #      (Requires storing QB TxnID in Odoo invoices or a reliable mapping).
-
-    odoo_payment_payload = {
-        "partner_id": odoo_partner_id,
-        "date": qb_payment_data.get("txn_date"), # Payment date
-        "amount": qb_payment_data.get("total_amount"),
-        # "journal_id": payment_journal_id,
-        "payment_type": "inbound", # Payment received from customer
-        "partner_type": "customer",
-        "ref": qb_payment_data.get("ref_number") or qb_payment_data.get("qb_txn_id"), # Payment reference
-        # "qb_txn_id_custom_field": qb_payment_data.get("qb_txn_id")
-    }
-
-    logger.info(f"TODO: Actual Odoo 'account.payment' create call for QB Payment TxnID: {qb_payment_data.get('qb_txn_id')}")
-    logger.debug(f"Odoo Payment Payload (Conceptual): {odoo_payment_payload}")
-    
-    # new_odoo_payment_id = _odoo_rpc_call("account.payment", "create", args=[odoo_payment_payload])
-    # if new_odoo_payment_id:
-    #    logger.info(f"Successfully created Odoo payment with ID: {new_odoo_payment_id}")
-    #    # TODO: Post the payment:
-    #    # _odoo_rpc_call("account.payment", "action_post", args=[[new_odoo_payment_id]])
-    #    # TODO: Reconcile the payment against invoices. This is the hard part.
-    #    # It might involve finding open Odoo invoices for the partner,
-    #    # matching them based on qb_payment_data["applied_to_txns"], and then using
-    #    # Odoo's reconciliation mechanisms.
-    #    # For example, after posting, the payment might be in 'posted' state, and its move lines
-    #    # (receivable line) would need to be reconciled with invoice receivable lines.
-    #    # This often involves `action_reconcile` on the payment or directly creating `account.partial.reconcile`.
-    #    logger.info(f"TODO: Reconcile Odoo payment {new_odoo_payment_id} against corresponding invoices.")
-    #    return new_odoo_payment_id
-    # else:
-    #    logger.error(f"Failed to create Odoo payment for QB TxnID: {qb_payment_data.get('qb_txn_id')}")
-    #    return None
-
-    return 91011 # Placeholder ID
