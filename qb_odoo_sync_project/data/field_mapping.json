@@ -7,30 +7,33 @@
       "qbd_object": "Customer",
       "odoo_model": "res.partner",
       "fields": [
-        { "qbd_field": "ListID", "odoo_field": "external_id"},
-        { "qbd_field": "Name", "odoo_field": "name"},
-        { "qbd_field": "CompanyName", "odoo_field": "name"},
-        { "qbd_field": "FirstName", "odoo_field": "name"},
-        { "qbd_field": "LastName", "odoo_field": "name"},
+        { "qbd_field": "ListID", "odoo_field": "external_id" },
+        { "qbd_field": "Name", "odoo_field": "name", "custom_logic": "Convert 'LastName, FirstName' to 'FirstName LastName' for Odoo. When syncing from Odoo to QuickBooks, convert 'FirstName LastName' to 'LastName, FirstName'. Use this logic for matching to avoid duplicates." },
+        { "qbd_field": "CompanyName", "odoo_field": "name" },
+        { "qbd_field": "FirstName", "odoo_field": "first_name" },
+        { "qbd_field": "LastName", "odoo_field": "last_name" },
         { "qbd_field": "BillAddress_Addr1", "odoo_field": "street" },
         { "qbd_field": "BillAddress_Addr2", "odoo_field": "street2" },
         { "qbd_field": "BillAddress_City", "odoo_field": "city" },
-        { "qbd_field": "BillAddress_State", "odoo_field": "state_id"},
+        { "qbd_field": "BillAddress_State", "odoo_field": "state_id" },
         { "qbd_field": "BillAddress_PostalCode", "odoo_field": "zip" },
-        { "qbd_field": "BillAddress_Country", "odoo_field": "country_id"},
-        { "qbd_field": "ShipAddress_Addr1", "odoo_field": "child_ids.street"},
+        { "qbd_field": "BillAddress_Country", "odoo_field": "country_id" },
+        { "qbd_field": "ShipAddress_Addr1", "odoo_field": "child_ids.street" },
         { "qbd_field": "Phone", "odoo_field": "phone" },
         { "qbd_field": "AltPhone", "odoo_field": "mobile" },
         { "qbd_field": "Email", "odoo_field": "email" },
-        { "qbd_field": "Contact", "odoo_field": "child_ids.name"},
-        { "qbd_field": "Notes", "odoo_field": "comment"},
-        { "qbd_field": "CustomerTypeRef_FullName", "odoo_field": "category_id"},
-        { "qbd_field": "TermsRef_FullName", "odoo_field": "property_payment_term_id"},
-        { "qbd_field": "IsActive", "odoo_field": "active"}
+        { "qbd_field": "Contact", "odoo_field": "child_ids.name" },
+        { "qbd_field": "Notes", "odoo_field": "comment" },
+        { "qbd_field": "CustomerTypeRef_FullName", "odoo_field": "category_id" },
+        { "qbd_field": "TermsRef_FullName", "odoo_field": "property_payment_term_id" },
+        { "qbd_field": "IsActive", "odoo_field": "active" }
       ],
       "default_values": {
         "customer_rank": 1,
         "company_type": "company"
+      },
+      "custom_logic": {
+        "name_format": "Convert QuickBooks 'LastName, FirstName' to Odoo 'FirstName LastName' and vice versa for sync and matching."
       }
     },
     "Vendors": {
@@ -60,21 +63,24 @@
       "qbd_object": "Item",
       "odoo_model": "product.template",
       "fields": [
-        { "qbd_field": "ListID", "odoo_field": "external_id"},
-        { "qbd_field": "Name", "odoo_field": "name"},
-        { "qbd_field": "FullName", "odoo_field": "default_code"},
-        { "qbd_field": "SalesDesc", "odoo_field": "description_sale"},
-        { "qbd_field": "PurchaseDesc", "odoo_field": "description_purchase"},
-        { "qbd_field": "SalesPrice", "odoo_field": "list_price"},
-        { "qbd_field": "PurchaseCost", "odoo_field": "standard_price"},
-        { "qbd_field": "Type", "odoo_field": "type"},
-        { "qbd_field": "IncomeAccountRef_FullName", "odoo_field": "property_account_income_id"},
-        { "qbd_field": "ExpenseAccountRef_FullName", "odoo_field": "property_account_expense_id"},
-        { "qbd_field": "COGSAccountRef_FullName", "odoo_field": "property_account_expense_id"},
-        { "qbd_field": "AssetAccountRef_FullName", "odoo_field": "categ_id.property_stock_valuation_account_id"},
-        { "qbd_field": "UnitOfMeasureSetRef_FullName", "odoo_field": "uom_id / uom_po_id"},
-        { "qbd_field": "IsActive", "odoo_field": "active"}
+        { "qbd_field": "ListID", "odoo_field": "external_id" },
+        { "qbd_field": "FullName", "odoo_field": "default_code", "custom_logic": "Use the subitem (model number) from 'Item:Subitem' as Internal Reference in Odoo." },
+        { "qbd_field": "FullName", "odoo_field": "model_number" },
+        { "qbd_field": "PurchaseDesc", "odoo_field": "description_purchase" },
+        { "qbd_field": "SalesDesc", "odoo_field": "description_sale" },
+        { "qbd_field": "SalesPrice", "odoo_field": "list_price" },
+        { "qbd_field": "PurchaseCost", "odoo_field": "standard_price" },
+        { "qbd_field": "Type", "odoo_field": "type" },
+        { "qbd_field": "IncomeAccountRef_FullName", "odoo_field": "property_account_income_id" },
+        { "qbd_field": "ExpenseAccountRef_FullName", "odoo_field": "property_account_expense_id" },
+        { "qbd_field": "COGSAccountRef_FullName", "odoo_field": "property_account_expense_id" },
+        { "qbd_field": "AssetAccountRef_FullName", "odoo_field": "categ_id.property_stock_valuation_account_id" },
+        { "qbd_field": "UnitOfMeasureSetRef_FullName", "odoo_field": "uom_id / uom_po_id" },
+        { "qbd_field": "IsActive", "odoo_field": "active" }
       ],
+      "custom_logic": {
+        "name": "Odoo Product Name should be the model number (subitem) from FullName plus the description (from PurchaseDesc or SalesDesc), max 32 characters. Internal Reference should be the model number (subitem) from FullName."
+      },
       "default_values": {
         "invoice_policy": "order",
         "purchase_method": "purchase"

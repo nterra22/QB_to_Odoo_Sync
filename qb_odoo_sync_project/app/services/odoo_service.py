@@ -124,6 +124,7 @@ def find_partner_by_ref(ref: str, company_id: Optional[int] = None) -> Optional[
 def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     """
     Ensure a partner exists in Odoo, creating if necessary.
+    Checks for duplicates using both 'FirstName LastName' and 'LastName, FirstName' formats.
     
     Args:
         name: Partner name
@@ -135,24 +136,38 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     if not name or not name.strip():
         logger.warning("Empty partner name provided")
         return None
-        
+    
     name = name.strip()
     is_supplier = kwargs.get('is_supplier', False) # Check for supplier hint
     is_customer = kwargs.get('is_customer', True) # Default to customer
 
-    # Search for existing partner
-    partners = _odoo_rpc_call(
-        "res.partner", 
-        "search_read",
-        args_list=[[['name', '=', name]]],  # Domain is the first positional arg, wrapped in a list
-        kwargs_dict={"fields": ["id"], "limit": 1}
-    )
-    
-    if partners:
-        partner_id = partners[0]["id"]
-        logger.info(f"Partner '{name}' found with ID: {partner_id}")
-        return partner_id
-    
+    # Try to split name for both formats
+    possible_names = [name]
+    if ',' in name:
+        # QuickBooks format: 'LastName, FirstName' -> Odoo: 'FirstName LastName'
+        last, first = [part.strip() for part in name.split(',', 1)]
+        possible_names.append(f"{first} {last}")
+    elif ' ' in name:
+        # Odoo format: 'FirstName LastName' -> QuickBooks: 'LastName, FirstName'
+        parts = name.split()
+        if len(parts) >= 2:
+            first = parts[0]
+            last = ' '.join(parts[1:])
+            possible_names.append(f"{last}, {first}")
+
+    # Search for existing partner by all possible name formats
+    for test_name in possible_names:
+        partners = _odoo_rpc_call(
+            "res.partner",
+            "search_read",
+            args_list=[[['name', '=', test_name]]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
+        )
+        if partners:
+            partner_id = partners[0]["id"]
+            logger.info(f"Partner '{test_name}' found with ID: {partner_id}")
+            return partner_id
+
     # Create new partner
     logger.info(f"Partner '{name}' not found. Creating...")
     partner_data = {
