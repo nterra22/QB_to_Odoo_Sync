@@ -5,7 +5,7 @@ Implements the QBWC web service interface for communicating with QuickBooks
 via the QuickBooks Web Connector application.
 """
 from spyne import rpc, ServiceBase, Unicode, Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional
@@ -13,12 +13,29 @@ from typing import Dict, Any, Optional
 # Remove import of MAX_JOURNAL_ENTRIES_PER_REQUEST from config
 MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
 
+# Define task types
+QB_QUERY = "QB_QUERY"
+# QB_ADD = "QB_ADD" # For Odoo to QB
+# QB_MOD = "QB_MOD" # For Odoo to QB
+
+# Define entities for QB queries
+CUSTOMER_QUERY = "CustomerQuery"
+VENDOR_QUERY = "VendorQuery"
+INVOICE_QUERY = "InvoiceQuery"
+BILL_QUERY = "BillQuery"
+RECEIVEPAYMENT_QUERY = "ReceivePaymentQuery"
+# ITEM_QUERY = "ItemQuery" # Example for future expansion
+
+# Import Odoo service functions that will be used
 from .odoo_service import (
     ensure_partner_exists, 
     ensure_product_exists, 
     ensure_account_exists,
-    create_odoo_journal_entry,
-    ensure_journal_exists
+    # create_odoo_journal_entry, # Keep if direct journal entries are still a use case
+    ensure_journal_exists,
+    create_or_update_odoo_invoice, # New function to be created in odoo_service.py
+    create_or_update_odoo_bill,    # New function
+    create_or_update_odoo_payment  # New function
 )
 
 logger = logging.getLogger(__name__)
@@ -52,16 +69,88 @@ class QBWCService(ServiceBase):
         if strUserName == QBWC_USERNAME and strPassword == QBWC_PASSWORD:
             logger.info("Authentication successful")
             
-            # Create unique session key
             session_key = f"ticket_{int(datetime.now().timestamp())}_{strUserName}"
+            
+            today_date_str = datetime.now().strftime('%Y-%m-%d')
+            # More robust date range, e.g., last 7 days or configurable
+            # For now, sticking to today for simplicity in this phase
+            # from_date_str = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d') 
+            
+            initial_tasks = [
+                {
+                    "type": QB_QUERY, 
+                    "entity": CUSTOMER_QUERY, 
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {} # No specific params for full customer list initially
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": VENDOR_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {} # No specific params for full vendor list initially
+                },
+                # { # Example for ItemQuery if added later
+                #     "type": QB_QUERY,
+                #     "entity": ITEM_QUERY,
+                #     "requestID": "1",
+                #     "iteratorID": None,
+                #     "params": {}
+                # },
+                {
+                    "type": QB_QUERY,
+                    "entity": INVOICE_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": { # Filter by transaction date
+                            "FromTxnDate": today_date_str, # Or from_date_str for a wider range
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true",
+                        # "PaidStatus": "NotPaidOnly" # Example: if you only want unpaid invoices
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": BILL_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        },
+                        "IncludeLineItems": "true",
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": RECEIVEPAYMENT_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        "TxnDateRangeFilter": {
+                            "FromTxnDate": today_date_str,
+                            "ToTxnDate": today_date_str
+                        }
+                    }
+                }
+                # TODO: Add tasks for SalesOrderQuery, PurchaseOrderQuery etc.
+                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
+            ]
+
             qbwc_session_state[session_key] = {
-                "iteratorID": None,
-                "remaining": 0,
+                "task_queue": initial_tasks,
+                "current_task_index": 0, # Pointer to the current task in the queue
                 "last_error": "No error",
-                "created_at": datetime.now()
+                "created_at": datetime.now(),
+                "company_file_name": None, # Will be set by QBWC
+                "qbxml_version": None # Will be set by QBWC
             }
             
-            return [session_key, ""]
+            return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
             logger.warning(f"Authentication failed for user: {strUserName}")
             return ["", "nvu"]
@@ -75,140 +164,645 @@ class QBWCService(ServiceBase):
             logger.error(f"sendRequestXML: Invalid ticket {ticket}")
             return "" # Return empty string if no valid session
 
-        # Get current date in YYYY-MM-DD format
-        today_date_str = datetime.now().strftime('%Y-%m-%d')
-        
+        # Store company file and QBXML version info from QBWC
+        session_data["company_file_name"] = strCompanyFileName
+        session_data["qbxml_version"] = f"{qbXMLMajorVers}.{qbXMLMinorVers}"
+
+        task_queue = session_data.get("task_queue", [])
+        current_task_index = session_data.get("current_task_index", 0)
+
+        if current_task_index >= len(task_queue):
+            logger.info("All tasks completed for this session.")
+            # Optionally, here you could trigger fetching changes from Odoo
+            # and populate the queue with new tasks to send data to QB.
+            # For now, we signal no more requests.
+            return "" # No more requests
+
+        current_task = task_queue[current_task_index]
+        session_data["active_task"] = current_task # Store active task for receiveResponseXML
+
         xml_request = ""
+        request_id_str = current_task.get("requestID", "1") # Default to "1"
 
-        # Check for active invoice iterator
-        invoice_iterator_id = session_data.get("invoice_iterator_id")
+        if current_task["type"] == QB_QUERY:
+            entity = current_task["entity"]
+            iterator_id = current_task.get("iteratorID")
 
-        if invoice_iterator_id:
-            logger.info(f"Continuing InvoiceQueryRq with iteratorID: {invoice_iterator_id}")
-            xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbXMLMajorVers}.{qbXMLMinorVers}"?>
+            if entity == CUSTOMER_QUERY:
+                if iterator_id:
+                    logger.info(f"Continuing CustomerQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
-    <InvoiceQueryRq requestID="2" iterator="Continue" iteratorID="{invoice_iterator_id}">
+    <CustomerQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>100</MaxReturned>
+    </CustomerQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info("Starting new CustomerQueryRq.")
+                    # params = current_task.get("params", {})
+                    # active_status_filter = f"<ActiveStatus>{params['ActiveStatus']}</ActiveStatus>" if "ActiveStatus" in params else ""
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <CustomerQueryRq requestID="{request_id_str}">
+      {'''<!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->''' } 
+      <MaxReturned>100</MaxReturned>
+    </CustomerQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            
+            elif entity == VENDOR_QUERY:
+                if iterator_id:
+                    logger.info(f"Continuing VendorQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <VendorQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>100</MaxReturned>
+    </VendorQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info("Starting new VendorQueryRq.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <VendorQueryRq requestID="{request_id_str}">
+      {'''<!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->''' }
+      <MaxReturned>100</MaxReturned>
+    </VendorQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+
+            elif entity == INVOICE_QUERY:
+                params = current_task.get("params", {})
+                txn_date_filter_xml = ""
+                if "TxnDateRangeFilter" in params:
+                    txn_date_filter_xml = f'''<TxnDateRangeFilter>
+        <FromTxnDate>{params["TxnDateRangeFilter"]["FromTxnDate"]}</FromTxnDate>
+        <ToTxnDate>{params["TxnDateRangeFilter"]["ToTxnDate"]}</ToTxnDate>
+      </TxnDateRangeFilter>'''
+                
+                include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
+                owner_id_xml = f'''<OwnerID>{params["OwnerID"]}</OwnerID>''' if "OwnerID" in params else ""
+
+                if iterator_id:
+                    logger.info(f"Continuing InvoiceQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
       <MaxReturned>100</MaxReturned> 
     </InvoiceQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
-        else:
-            # No active iterator, or previous query type completed. Start new InvoiceQuery.
-            logger.info(f"Starting new InvoiceQueryRq for date: {today_date_str}")
-            session_data["current_query_type"] = "Invoice" # Mark current query type
-            xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbXMLMajorVers}.{qbXMLMinorVers}"?>
+                else:
+                    logger.info(f"Starting new InvoiceQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
-    <InvoiceQueryRq requestID="1">
-      <TxnDateRangeFilter>
-        <FromTxnDate>{today_date_str}</FromTxnDate>
-        <ToTxnDate>{today_date_str}</ToTxnDate>
-      </TxnDateRangeFilter>
-      <IncludeLineItems>true</IncludeLineItems>
-      <OwnerID>0</OwnerID> 
+    <InvoiceQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      {owner_id_xml}
+      <MaxReturned>100</MaxReturned> 
     </InvoiceQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
-            # Clear any previous iterator ID for safety if we are starting a new query type
-            if "invoice_iterator_id" in session_data:
-                del session_data["invoice_iterator_id"]
-        
-        logger.debug(f"Sending QBXML request: {xml_request}")
+            elif entity == BILL_QUERY:
+                params = current_task.get("params", {})
+                txn_date_filter_xml = ""
+                if "TxnDateRangeFilter" in params:
+                    txn_date_filter_xml = f'''<TxnDateRangeFilter>
+        <FromTxnDate>{params["TxnDateRangeFilter"]["FromTxnDate"]}</FromTxnDate>
+        <ToTxnDate>{params["TxnDateRangeFilter"]["ToTxnDate"]}</ToTxnDate>
+      </TxnDateRangeFilter>'''
+                include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
+
+                if iterator_id:
+                    logger.info(f"Continuing BillQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <BillQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>50</MaxReturned> 
+    </BillQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new BillQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <BillQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      {include_line_items_xml}
+      <MaxReturned>50</MaxReturned> 
+    </BillQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+            elif entity == RECEIVEPAYMENT_QUERY:
+                params = current_task.get("params", {})
+                txn_date_filter_xml = ""
+                if "TxnDateRangeFilter" in params:
+                    txn_date_filter_xml = f'''<TxnDateRangeFilter>
+                        <FromTxnDate>{params["TxnDateRangeFilter"]["FromTxnDate"]}</FromTxnDate>
+                        <ToTxnDate>{params["TxnDateRangeFilter"]["ToTxnDate"]}</ToTxnDate>
+                    </TxnDateRangeFilter>'''
+                
+                if iterator_id:
+                    logger.info(f"Continuing ReceivePaymentQueryRq with iteratorID: {iterator_id}")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <ReceivePaymentQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
+      <MaxReturned>50</MaxReturned>
+    </ReceivePaymentQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+                else:
+                    logger.info(f"Starting new ReceivePaymentQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data["qbxml_version"]}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <ReceivePaymentQueryRq requestID="{request_id_str}">
+      {txn_date_filter_xml}
+      <IncludeLineItems>true</IncludeLineItems> {'''<!-- To see which invoices are paid -->''' }
+      <MaxReturned>50</MaxReturned>
+    </ReceivePaymentQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+
+        # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
+        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync
+
+        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}: {xml_request}")
         return xml_request
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def receiveResponseXML(self, ticket, response, hresult, message):
         logger.debug("Method receiveResponseXML called")
         logger.info(f"QBWC Service: receiveResponseXML called. Ticket: {ticket}")
-        logger.debug(f"Received QBXML response: {response}") # Log the full response for debugging
+        # Log first 1000 chars of response for brevity in general logs
+        logger.debug(f"Received QBXML response (first 1000 chars): {response[:1000] if response else 'Empty response'}")
+        if len(response) > 1000:
+            logger.debug("Full QBXML response is longer and logged separately if detailed debug is enabled for XML.")
 
         session_data = qbwc_session_state.get(ticket)
         if not session_data:
             logger.error(f"receiveResponseXML: Invalid ticket {ticket}")
             return "0" # Error or no progress
 
-        current_query = session_data.get("current_query_type")
-        progress = 0
+        active_task = session_data.get("active_task")
+        if not active_task:
+            logger.error("receiveResponseXML: No active task found for this session.")
+            return "0"
 
-        if current_query == "Invoice":
-            try:
-                if not response:
-                    logger.warning("Received empty response for InvoiceQuery.")
-                    # Consider this an end of this step or an error
-                    if "invoice_iterator_id" in session_data:
-                        del session_data["invoice_iterator_id"]
-                    if "current_query_type" in session_data:
-                        del session_data["current_query_type"]
-                    return "100" # Or some error code if appropriate
+        progress = 0 # Default progress
 
-                root = ET.fromstring(response)
-                invoice_query_rs = root.find('.//InvoiceQueryRs')
+        try:
+            if not response:
+                logger.warning(f"Received empty response for task: {active_task}")
+                # Consider this an end of this step or an error
+                active_task["iteratorID"] = None # Clear iterator
+                session_data["current_task_index"] += 1 # Move to next task
+                progress = 100 # Mark this step as complete
+                return str(progress)
 
-                if invoice_query_rs is not None:
-                    status_code = invoice_query_rs.get('statusCode', 'unknown')
-                    status_message = invoice_query_rs.get('statusMessage', 'N/A')
-                    logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
+            root = ET.fromstring(response)
+            
+            # Generic response processing based on active_task type and entity
+            if active_task["type"] == QB_QUERY:
+                entity = active_task["entity"]
+                
+                if entity == CUSTOMER_QUERY:
+                    customer_query_rs = root.find('.//CustomerQueryRs')
+                    if customer_query_rs is not None:
+                        status_code = customer_query_rs.get('statusCode', 'unknown')
+                        status_message = customer_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"CustomerQueryRs status: {status_code} - {status_message}")
 
-                    if status_code == '0': # Success
-                        # Process invoices here if needed in the future
-                        # For now, just log them
-                        invoices = invoice_query_rs.findall('.//InvoiceRet')
-                        logger.info(f"Received {len(invoices)} invoices in this response.")
-                        for inv in invoices:
-                            txn_id = inv.find('TxnID')
-                            ref_number = inv.find('RefNumber')
-                            logger.info(f"  Invoice TxnID: {txn_id.text if txn_id is not None else 'N/A'}, RefNumber: {ref_number.text if ref_number is not None else 'N/A'}")
+                        if status_code == '0': # Success
+                            customers = customer_query_rs.findall('.//CustomerRet')
+                            logger.info(f"Received {len(customers)} customers in this response.")
+                            for cust in customers:
+                                list_id = cust.find('ListID')
+                                name_elem = cust.find('Name')
+                                
+                                customer_name = name_elem.text if name_elem is not None and name_elem.text else None
+                                
+                                if customer_name:
+                                    logger.info(f"  Processing Customer: {customer_name} (ListID: {list_id.text if list_id is not None else 'N/A'})")
+                                    try:
+                                        # TODO: Enhance ensure_partner_exists to take more details from 'cust' element if needed
+                                        odoo_partner_id = ensure_partner_exists(name=customer_name)
+                                        if odoo_partner_id:
+                                            logger.info(f"    Ensured Odoo partner for '{customer_name}' exists with ID: {odoo_partner_id}")
+                                        else:
+                                            logger.warning(f"    Could not ensure Odoo partner for '{customer_name}'.")
+                                    except Exception as e:
+                                        logger.error(f"    Error processing customer '{customer_name}' for Odoo: {e}", exc_info=True)
+                                else:
+                                    logger.warning(f"  Skipping customer with missing name (ListID: {list_id.text if list_id is not None else 'N/A'}).")
 
-                        iterator_id = invoice_query_rs.get("iteratorID")
-                        iterator_remaining_count_str = invoice_query_rs.get("iteratorRemainingCount")
-                        
-                        if iterator_id and iterator_remaining_count_str and int(iterator_remaining_count_str) > 0:
-                            session_data["invoice_iterator_id"] = iterator_id
-                            # Simple progress: 50% if iterating, 100% if done with this batch but more might come.
-                            # A more accurate progress would require knowing total count beforehand.
-                            progress = 50 
-                            logger.info(f"Invoice iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count_str}")
+                            iterator_id = customer_query_rs.get("iteratorID")
+                            iterator_remaining_count = customer_query_rs.get("iteratorRemainingCount")
+                            
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1) # Increment requestID for next iteration call
+                                # Progress can be estimated if total is known, otherwise 50% if iterating
+                                progress = 50 
+                                logger.info(f"Customer iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
+                            else:
+                                logger.info("Customer iteration complete or no iterator.")
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1 # Move to next task
+                                progress = 100
                         else:
-                            logger.info("Invoice iteration complete or no iterator.")
-                            if "invoice_iterator_id" in session_data:
-                                del session_data["invoice_iterator_id"]
-                            # We could clear current_query_type here or set it to the next one
-                            # For this test, we'll assume we are done with Invoices for now.
-                            if "current_query_type" in session_data:
-                                del session_data["current_query_type"]
+                            logger.error(f"CustomerQueryRs failed with statusCode: {status_code}, message: {status_message}")
+                            session_data["last_error"] = f"CustomerQuery Error: {status_message}"
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1 # Move to next task, even on error
+                            progress = 100 
+                    else:
+                        logger.warning("Could not find CustomerQueryRs in the response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                elif entity == VENDOR_QUERY:
+                    vendor_query_rs = root.find('.//VendorQueryRs')
+                    if vendor_query_rs is not None:
+                        status_code = vendor_query_rs.get('statusCode', 'unknown')
+                        status_message = vendor_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"VendorQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0': # Success
+                            vendors = vendor_query_rs.findall('.//VendorRet')
+                            logger.info(f"Received {len(vendors)} vendors in this response.")
+                            for vend in vendors:
+                                list_id_elem = vend.find('ListID')
+                                name_elem = vend.find('Name')
+                                vendor_name = name_elem.text if name_elem is not None and name_elem.text else None
+                                if vendor_name:
+                                    logger.info(f"  Processing Vendor: {vendor_name} (ListID: {list_id_elem.text if list_id_elem is not None else 'N/A'})")
+                                    try:
+                                        # Using ensure_partner_exists for vendors too.
+                                        # Might need a specific ensure_vendor_exists if Odoo distinction is critical (e.g. supplier flags)
+                                        odoo_vendor_id = ensure_partner_exists(name=vendor_name, is_supplier=True) # Pass is_supplier hint
+                                        if odoo_vendor_id:
+                                            logger.info(f"    Ensured Odoo partner (vendor) for '{vendor_name}' exists with ID: {odoo_vendor_id}")
+                                        else:
+                                            logger.warning(f"    Could not ensure Odoo partner (vendor) for '{vendor_name}'.")
+                                    except Exception as e:
+                                        logger.error(f"    Error processing vendor '{vendor_name}' for Odoo: {e}", exc_info=True)
+                                else:
+                                    logger.warning(f"  Skipping vendor with missing name (ListID: {list_id_elem.text if list_id_elem is not None else 'N/A'}).")
+                            
+                            iterator_id = vendor_query_rs.get("iteratorID")
+                            iterator_remaining_count = vendor_query_rs.get("iteratorRemainingCount")
+                            
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50 
+                                logger.info(f"Vendor iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
+                            else:
+                                logger.info("Vendor iteration complete or no iterator.")
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1 
+                                progress = 100
+                        else:
+                            logger.error(f"VendorQueryRs failed with statusCode: {status_code}, message: {status_message}")
+                            session_data["last_error"] = f"VendorQuery Error: {status_message}"
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1 
+                            progress = 100 
+                    else:
+                        logger.warning("Could not find VendorQueryRs in the response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                elif entity == INVOICE_QUERY:
+                    invoice_query_rs = root.find('.//InvoiceQueryRs')
+                    if invoice_query_rs is not None:
+                        status_code = invoice_query_rs.get('statusCode', 'unknown')
+                        status_message = invoice_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0': # Success
+                            invoices = invoice_query_rs.findall('.//InvoiceRet')
+                            logger.info(f"Received {len(invoices)} invoices in this response.")
+                            for inv_xml in invoices:
+                                txn_id_elem = inv_xml.find('TxnID')
+                                ref_number_elem = inv_xml.find('RefNumber')
+                                customer_ref_full_name_elem = inv_xml.find('CustomerRef/FullName')
+                                txn_date_elem = inv_xml.find('TxnDate')
+                                due_date_elem = inv_xml.find('DueDate')
+                                memo_elem = inv_xml.find('Memo')
+                                bill_address_elem = inv_xml.find('BillAddress') # For more complete customer data if needed
+                                ship_address_elem = inv_xml.find('ShipAddress')
+                                is_paid_elem = inv_xml.find('IsPaid')
+                                subtotal_elem = inv_xml.find('Subtotal')
+                                sales_tax_total_elem = inv_xml.find('SalesTaxTotal')
+                                applied_amount_elem = inv_xml.find('AppliedAmount') # For payments applied
+                                balance_remaining_elem = inv_xml.find('BalanceRemaining')
+
+
+                                qb_invoice_data = {
+                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
+                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
+                                    "customer_name": customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None,
+                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
+                                    "due_date": due_date_elem.text if due_date_elem is not None else None,
+                                    "memo": memo_elem.text if memo_elem is not None else None,
+                                    "is_paid": is_paid_elem.text == 'true' if is_paid_elem is not None else False,
+                                    "subtotal": float(subtotal_elem.text) if subtotal_elem is not None and subtotal_elem.text else 0.0,
+                                    "sales_tax_total": float(sales_tax_total_elem.text) if sales_tax_total_elem is not None and sales_tax_total_elem.text else 0.0,
+                                    "applied_amount": float(applied_amount_elem.text) if applied_amount_elem is not None and applied_amount_elem.text else 0.0,
+                                    "balance_remaining": float(balance_remaining_elem.text) if balance_remaining_elem is not None and balance_remaining_elem.text else 0.0,
+                                    "lines": []
+                                }
+                                
+                                logger.info(f"  Processing Invoice TxnID: {qb_invoice_data['qb_txn_id']}, Ref: {qb_invoice_data['ref_number']}")
+
+                                if not qb_invoice_data["customer_name"]:
+                                    logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} has no customer name. Skipping Odoo processing for this invoice.")
+                                    continue
+
+                                for line_xml in inv_xml.findall('.//InvoiceLineRet'):
+                                    item_ref_full_name_elem = line_xml.find('ItemRef/FullName')
+                                    desc_elem = line_xml.find('Desc')
+                                    quantity_elem = line_xml.find('Quantity')
+                                    rate_elem = line_xml.find('Rate')
+                                    amount_elem = line_xml.find('Amount')
+                                    # TODO: Extract SalesTaxCodeRef, OverrideItemAccountRef if needed for Odoo mapping
+
+                                    line_data = {
+                                        "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
+                                        "description": desc_elem.text if desc_elem is not None else None,
+                                        "quantity": float(quantity_elem.text) if quantity_elem is not None and quantity_elem.text else 0.0,
+                                        "rate": float(rate_elem.text) if rate_elem is not None and rate_elem.text else 0.0,
+                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
+                                    }
+                                    qb_invoice_data["lines"].append(line_data)
+                                
+                                try:
+                                    odoo_invoice_id = create_or_update_odoo_invoice(qb_invoice_data)
+                                    if odoo_invoice_id:
+                                        logger.info(f"    Successfully processed Invoice {qb_invoice_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_invoice_id}).")
+                                    else:
+                                        logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} processed for Odoo but no Odoo ID returned (may indicate create/update issue or placeholder).")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Invoice {qb_invoice_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
+
+                            iterator_id = invoice_query_rs.get("iteratorID")
+                            iterator_remaining_count = invoice_query_rs.get("iteratorRemainingCount")
+                            
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50 
+                                logger.info(f"Invoice iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
+                            else:
+                                logger.info("Invoice iteration complete or no iterator.")
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1 # Move to next task
+                                progress = 100
+                        else:
+                            logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
+                            session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
                             progress = 100
                     else:
-                        logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
-                        session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
-                        if "invoice_iterator_id" in session_data:
-                            del session_data["invoice_iterator_id"]
-                        if "current_query_type" in session_data:
-                            del session_data["current_query_type"]
-                        progress = 100 # Indicate this step is done, but with an error logged
-                else:
-                    logger.warning("Could not find InvoiceQueryRs in the response.")
-                    # Clear iterator and query type as we don't know the state
-                    if "invoice_iterator_id" in session_data:
-                        del session_data["invoice_iterator_id"]
-                    if "current_query_type" in session_data:
-                        del session_data["current_query_type"]
-                    progress = 100 # Or an error state
-            except ET.ParseError as e:
-                logger.error(f"Error parsing XML response: {e}")
-                session_data["last_error"] = "XML Parse Error in receiveResponseXML"
-                if "invoice_iterator_id" in session_data:
-                    del session_data["invoice_iterator_id"]
-                if "current_query_type" in session_data:
-                    del session_data["current_query_type"]
-                return "0" # Error
-        else:
-            logger.info("Received response for an unknown or completed query type.")
-            # If no current_query_type is set, or it's not "Invoice", assume 100% done for whatever previous step was.
-            progress = 100
+                        logger.warning("Could not find InvoiceQueryRs in the response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+                elif entity == BILL_QUERY:
+                    bill_query_rs = root.find('.//BillQueryRs')
+                    if bill_query_rs is not None:
+                        status_code = bill_query_rs.get('statusCode', 'unknown')
+                        status_message = bill_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"BillQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0':
+                            bills = bill_query_rs.findall('.//BillRet')
+                            logger.info(f"Received {len(bills)} bills in this response.")
+                            for bill_xml in bills:
+                                txn_id_elem = bill_xml.find('TxnID')
+                                vendor_ref_full_name_elem = bill_xml.find('VendorRef/FullName')
+                                ref_number_elem = bill_xml.find('RefNumber') # Vendor Bill No.
+                                txn_date_elem = bill_xml.find('TxnDate')
+                                due_date_elem = bill_xml.find('DueDate')
+                                amount_due_elem = bill_xml.find('AmountDue')
+                                memo_elem = bill_xml.find('Memo')
+
+                                qb_bill_data = {
+                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
+                                    "vendor_name": vendor_ref_full_name_elem.text if vendor_ref_full_name_elem is not None else None,
+                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
+                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
+                                    "due_date": due_date_elem.text if due_date_elem is not None else None,
+                                    "amount_due": float(amount_due_elem.text) if amount_due_elem is not None and amount_due_elem.text else 0.0,
+                                    "memo": memo_elem.text if memo_elem is not None else None,
+                                    "expense_lines": [],
+                                    "item_lines": [] # QB Bills can have both expense and item lines
+                                }
+                                logger.info(f"  Processing Bill TxnID: {qb_bill_data['qb_txn_id']}, Ref: {qb_bill_data['ref_number']}")
+
+                                if not qb_bill_data["vendor_name"]:
+                                    logger.warning(f"    Bill {qb_bill_data['qb_txn_id']} has no vendor name. Skipping Odoo processing.")
+                                    continue
+
+                                for line_xml in bill_xml.findall('.//ExpenseLineRet'):
+                                    account_ref_full_name_elem = line_xml.find('AccountRef/FullName')
+                                    amount_elem = line_xml.find('Amount')
+                                    memo_elem = line_xml.find('Memo') # Line memo
+                                    # TODO: CustomerRef, BillableStatus for job costing if needed
+                                    expense_line_data = {
+                                        "account_name": account_ref_full_name_elem.text if account_ref_full_name_elem is not None else None,
+                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
+                                        "memo": memo_elem.text if memo_elem is not None else None,
+                                    }
+                                    qb_bill_data["expense_lines"].append(expense_line_data)
+
+                                for line_xml in bill_xml.findall('.//ItemLineRet'):
+                                    item_ref_full_name_elem = line_xml.find('ItemRef/FullName')
+                                    desc_elem = line_xml.find('Desc') # Usually copied from item
+                                    quantity_elem = line_xml.find('Quantity')
+                                    cost_elem = line_xml.find('Cost')
+                                    amount_elem = line_xml.find('Amount')
+                                    # TODO: CustomerRef, BillableStatus for job costing
+                                    item_line_data = {
+                                        "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
+                                        "description": desc_elem.text if desc_elem is not None else None,
+                                        "quantity": float(quantity_elem.text) if quantity_elem is not None and quantity_elem.text else 0.0,
+                                        "cost": float(cost_elem.text) if cost_elem is not None and cost_elem.text else 0.0,
+                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
+                                    }
+                                    qb_bill_data["item_lines"].append(item_line_data)
+                                
+                                try:
+                                    odoo_bill_id = create_or_update_odoo_bill(qb_bill_data)
+                                    if odoo_bill_id:
+                                        logger.info(f"    Successfully processed Bill {qb_bill_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_bill_id}).")
+                                    else:
+                                        logger.warning(f"    Bill {qb_bill_data['qb_txn_id']} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Bill {qb_bill_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
+
+                            iterator_id = bill_query_rs.get("iteratorID")
+                            iterator_remaining_count = bill_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"BillQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find BillQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                elif entity == RECEIVEPAYMENT_QUERY:
+                    payment_query_rs = root.find('.//ReceivePaymentQueryRs')
+                    if payment_query_rs is not None:
+                        status_code = payment_query_rs.get('statusCode', 'unknown')
+                        status_message = payment_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"ReceivePaymentQueryRs status: {status_code} - {status_message}")
+
+                        if status_code == '0':
+                            payments = payment_query_rs.findall('.//ReceivePaymentRet')
+                            logger.info(f"Received {len(payments)} payments in this response.")
+                            for payment_xml in payments:
+                                txn_id_elem = payment_xml.find('TxnID')
+                                customer_ref_full_name_elem = payment_xml.find('CustomerRef/FullName')
+                                txn_date_elem = payment_xml.find('TxnDate')
+                                ref_number_elem = payment_xml.find('RefNumber') # Check / Pmt #
+                                total_amount_elem = payment_xml.find('TotalAmount')
+                                memo_elem = payment_xml.find('Memo')
+                                # PaymentMethodRef, DepositToAccountRef might be useful
+
+                                qb_payment_data = {
+                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
+                                    "customer_name": customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None,
+                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
+                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
+                                    "total_amount": float(total_amount_elem.text) if total_amount_elem is not None and total_amount_elem.text else 0.0,
+                                    "memo": memo_elem.text if memo_elem is not None else None,
+                                    "applied_to_txns": []
+                                }
+                                logger.info(f"  Processing Payment TxnID: {qb_payment_data['qb_txn_id']}, Ref: {qb_payment_data['ref_number']}")
+
+                                if not qb_payment_data["customer_name"]:
+                                    logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} has no customer name. Skipping Odoo processing.")
+                                    continue
+                                
+                                # AppliedToTxnRet shows which invoices/charges the payment is applied to
+                                for applied_txn_xml in payment_xml.findall('.//AppliedToTxnRet'):
+                                    applied_txn_id_elem = applied_txn_xml.find('TxnID') # TxnID of the Invoice
+                                    payment_amount_elem = applied_txn_xml.find('PaymentAmount')
+                                    # DiscountAmount, DiscountAccountRef if discounts are used
+                                    applied_data = {
+                                        "applied_qb_invoice_txn_id": applied_txn_id_elem.text if applied_txn_id_elem is not None else None,
+                                        "payment_amount": float(payment_amount_elem.text) if payment_amount_elem is not None and payment_amount_elem.text else 0.0
+                                    }
+                                    qb_payment_data["applied_to_txns"].append(applied_data)
+                                
+                                try:
+                                    odoo_payment_id = create_or_update_odoo_payment(qb_payment_data)
+                                    if odoo_payment_id:
+                                        logger.info(f"    Successfully processed Payment {qb_payment_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_payment_id}).")
+                                    else:
+                                        logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Payment {qb_payment_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
+                            
+
+                            iterator_id = payment_query_rs.get("iteratorID")
+                            iterator_remaining_count = payment_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                                progress = 100
+                        else:
+                            logger.error(f"ReceivePaymentQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                            progress = 100
+                    else:
+                        logger.warning("Could not find ReceivePaymentQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = 100
+
+                # Add processing for other QB_QUERY entity responses here (e.g. ItemQueryRs)
             
+            # Add processing for QB_ADD_RS, QB_MOD_RS etc. in the future
+
+        except ET.ParseError as e:
+            logger.error(f"Error parsing XML response for task {active_task}: {e}. Response snippet: {response[:500] if response else 'Empty'}")
+            entity_name_for_error = active_task.get('entity', 'unknown task') if active_task else 'unknown task'
+            session_data["last_error"] = f"XML Parse Error in receiveResponseXML for {entity_name_for_error}"
+            if active_task:
+                active_task["iteratorID"] = None # Stop iteration on parse error
+            session_data["current_task_index"] += 1 # Try to move to next task
+            return "0" # Error
+        except Exception as e:
+            logger.error(f"Unexpected error processing response for task {active_task}: {e}", exc_info=True)
+            entity_name_for_error = active_task.get('entity', 'unknown task') if active_task else 'unknown task'
+            session_data["last_error"] = f"Unexpected error in receiveResponseXML for {entity_name_for_error}"
+            if active_task:
+                active_task["iteratorID"] = None
+            session_data["current_task_index"] += 1
+            return "0" # Error
+            
+        # Determine overall progress if all tasks in the current queue are done
+        if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
+            logger.info("All tasks in the current queue are processed.")
+            # Here, we could decide to fetch from Odoo and repopulate the task queue,
+            # or if that was the last step, truly be 100% done for this QBWC update session.
+            # For now, if queue is exhausted, this cycle is 100% done.
+            progress = 100
+        elif progress != 50 : # If not iterating, and not 100% done with all tasks, calculate intermediate progress
+            # Simple progress: percentage of tasks completed.
+            # This might not be what QBWC expects if it wants progress for the *current* request.
+            # The 'progress' returned should ideally be for the current step QBWC is waiting on.
+            # If a task is 100% done (like a non-iterated query, or last iteration),
+            # and there are more tasks, QBWC will call sendRequestXML again immediately.
+            # So, returning 100 for a completed task is fine.
+            pass
+
+
+        logger.info(f"receiveResponseXML returning progress: {progress}% for task: {active_task.get('entity', 'N/A')}")
         return str(progress)
 
     @rpc(Unicode, _returns=Unicode)
