@@ -209,7 +209,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <CustomerQueryRq requestID="{request_id_str}">
-      {'''<!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->''' } 
+      <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
       <MaxReturned>100</MaxReturned>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
@@ -234,7 +234,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}">
-      {'''<!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->''' }
+      <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
       <MaxReturned>100</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
@@ -339,7 +339,7 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <ReceivePaymentQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
-      <IncludeLineItems>true</IncludeLineItems> {'''<!-- To see which invoices are paid -->''' }
+      <IncludeLineItems>true</IncludeLineItems> <!-- To see which invoices are paid -->
       <MaxReturned>50</MaxReturned>
     </ReceivePaymentQueryRq>
   </QBXMLMsgsRq>

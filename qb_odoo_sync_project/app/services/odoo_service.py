@@ -14,8 +14,8 @@ from ..logging_config import logger
 from ..utils.data_loader import get_account_map, get_field_mapping # Added get_field_mapping
 
 # Hardcoded Odoo credentials
-ODOO_URL = "https://nterra-sounddecision-odoo.odoo.com"
-ODOO_API_KEY = "c5f9aa88c5f89b4b8c61d36dda5f7ba106e3b703"
+ODOO_URL = "https://nterra22-sounddecision-odoo-develop-20178686.dev.odoo.com"
+ODOO_API_KEY = "e8188dcec4b36dbc1e89e4da17b989c7aae8e568"
 ODOO_REQUEST_TIMEOUT = 30  # Hardcoded request timeout (in seconds)
 
 def _odoo_rpc_call(model: str, method: str, args: List = None, domain: List = None, 
