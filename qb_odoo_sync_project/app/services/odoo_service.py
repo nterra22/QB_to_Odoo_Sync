@@ -7,99 +7,119 @@ Handles all interactions with the Odoo ERP system including:
 - Chart of accounts management
 - Journal entry creation
 """
-import requests
+import xmlrpc.client # Added import
+import requests # Keep for potential future use or other integrations
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ..logging_config import logger
-from ..utils.data_loader import get_account_map, get_field_mapping # Added get_field_mapping
+from ..utils.data_loader import get_account_map, get_field_mapping
 
-# Hardcoded Odoo credentials
+# --- Odoo Connection Configuration ---
 ODOO_URL = "https://nterra22-sounddecision-odoo-develop-20178686.dev.odoo.com"
+ODOO_DB = "nterra22-sounddecision-odoo-develop-20178686"
+ODOO_USERNAME = "it@wadic.net" # Make sure this is the correct username for the API key
 ODOO_API_KEY = "e8188dcec4b36dbc1e89e4da17b989c7aae8e568"
-ODOO_REQUEST_TIMEOUT = 30  # Hardcoded request timeout (in seconds)
+ODOO_REQUEST_TIMEOUT = 60  # Increased timeout
+# --- End Odoo Connection Configuration ---
 
-def _odoo_rpc_call(model: str, method: str, args: List = None, domain: List = None, 
-                   fields: List[str] = None, limit: int = None, **kwargs_rpc) -> Optional[Any]: # Renamed kwargs to avoid conflict
+def _get_odoo_uid() -> Optional[int]:
+    """Authenticates with Odoo and returns the UID."""
+    try:
+        common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common', allow_none=True)
+        uid = common.login(ODOO_DB, ODOO_USERNAME, ODOO_API_KEY)
+        if uid:
+            logger.info(f"Successfully authenticated with Odoo. UID: {uid}")
+            return uid
+        else:
+            logger.error("Odoo authentication failed. No UID returned. Check credentials and DB name.")
+            return None
+    except xmlrpc.client.Fault as e:
+        logger.error(f"Odoo RPC Fault during login: {e.faultCode} - {e.faultString}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error during Odoo login: {e}")
+        return None
+
+_cached_uid = None
+
+def get_odoo_uid_cached() -> Optional[int]:
+    """Returns a cached Odoo UID, authenticating if necessary."""
+    global _cached_uid
+    if _cached_uid is None:
+        _cached_uid = _get_odoo_uid()
+    return _cached_uid
+
+def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict: Dict = None) -> Optional[Any]:
     """
-    Make a standardized RPC call to Odoo.
-    
+    Make a standardized XML-RPC call to Odoo using 'execute_kw'.
+
     Args:
         model: Odoo model name (e.g., 'res.partner')
-        method: Method to call (e.g., 'search_read', 'create')
-        args: Arguments for the method
-        domain: Search domain for search_read operations
-        fields: Fields to return for search_read operations
-        limit: Limit number of records returned
-        **kwargs_rpc: Additional parameters for Odoo (e.g. context for RPC call itself)
-        
+        method: Method to call (e.g., 'search_read', 'create', 'write')
+        args_list: Positional arguments for the Odoo method (e.g., [[domain_list]] for search, [[id], {values}] for write)
+        kwargs_dict: Keyword arguments for the Odoo method (e.g., {'fields': [...], 'limit': ...} for search_read)
+    
     Returns:
         Result from Odoo API or None on error
     """
-    url = f"{ODOO_URL}/jsonrpc"
-    
-    # Build payload based on method type
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "call",
-        "params": {
-            "model": model,
-            "method": method,
-            "args": args or [],
-            "kwargs": kwargs_rpc # Pass through additional kwargs to Odoo
-        },
-        "id": int(datetime.now().timestamp())
-    }
-    
-    # Add search_read specific parameters to "params" not "params.kwargs"
-    if method == "search_read":
-        # search_read uses a specific structure for its arguments
-        # The first element of 'args' is the domain (if any)
-        # Then kwargs like 'fields', 'limit', 'context' can be in the 'kwargs' part of the payload.params
-        payload["params"]["args"] = [domain or []] # Domain is the first positional arg
-        if fields:
-            payload["params"]["kwargs"]['fields'] = fields
-        if limit:
-            payload["params"]["kwargs"]['limit'] = limit
-    elif method == "create" or method == "write":
-        # For create/write, args is typically a list of dictionaries (for create) or [ids, vals] (for write)
-        # kwargs_rpc can contain 'context'
-        pass # args are already in payload["params"]["args"]
-
-    # Set up authentication headers
-    headers = {"Content-Type": "application/json"}
-    if ODOO_API_KEY:
-        if ODOO_API_KEY.startswith("Bearer "):
-            headers["Authorization"] = ODOO_API_KEY
-        else:
-            headers["X-Odoo-Api-Key"] = ODOO_API_KEY
+    uid = get_odoo_uid_cached()
+    if not uid:
+        logger.error("Cannot perform Odoo RPC call: Authentication failed or UID not available.")
+        return None
 
     try:
-        logger.debug(f"Odoo RPC Call: {model}.{method} with args: {args}")
-        response = requests.post(
-            url, 
-            json=payload, 
-            headers=headers, 
-            timeout=ODOO_REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
+        models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object', allow_none=True)
         
-        response_json = response.json()
-        if response_json.get("error"):
-            logger.error(f"Odoo API error ({model}.{method}): {response_json['error']}")
-            return None
-            
-        logger.info(f"Successfully connected to Odoo API and called {model}.{method}.")
-        return response_json.get("result")
+        params_for_execute_kw = [ODOO_DB, uid, ODOO_API_KEY, model, method]
         
-    except requests.exceptions.Timeout:
-        logger.error(f"Odoo API call ({model}.{method}) timed out after {ODOO_REQUEST_TIMEOUT}s")
+        if args_list is not None:
+            params_for_execute_kw.append(args_list)
+        else:
+            params_for_execute_kw.append([]) # Must provide an empty list if no positional args
+        
+        if kwargs_dict is not None:
+            params_for_execute_kw.append(kwargs_dict)
+        # else: # No need for empty dict if no kwargs_dict, execute_kw handles it
+            # params_for_execute_kw.append({})
+
+
+        logger.debug(f"Odoo XML-RPC call: model='{model}', method='{method}', args='{args_list}', kwargs='{kwargs_dict}'")
+        
+        result = models.execute_kw(*params_for_execute_kw)
+        
+        logger.debug(f"Odoo RPC call to {model}.{method} successful. Result snippet: {str(result)[:200]}...")
+        return result
+    except xmlrpc.client.Fault as e:
+        logger.error(f"Odoo RPC Fault for {model}.{method}: {e.faultCode} - {e.faultString}")
+        # Clear cached UID in case of authentication/session issue
+        global _cached_uid
+        if "AccessDenied" in e.faultString or "Session expired" in e.faultString: # Heuristic
+             _cached_uid = None
+             logger.info("Cleared cached Odoo UID due to potential session/access issue.")
         return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request failed for Odoo API ({model}.{method}): {e}")
+    except requests.exceptions.RequestException as e: # Catch network errors
+        logger.error(f"Network request exception during Odoo RPC call for {model}.{method}: {e}")
         return None
-    except Exception as e:
-        logger.error(f"Unexpected error in Odoo RPC call ({model}.{method}): {e}", exc_info=True)
+    except Exception as e: # Catch any other unexpected errors
+        logger.error(f"Unexpected error during Odoo RPC call for {model}.{method}: {e}")
         return None
+
+# --- Partner (Customer/Vendor) Management ---
+def find_partner_by_ref(ref: str, company_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Finds a partner by their 'ref' (QuickBooks ListID)."""
+    domain = [('ref', '=', ref)]
+    if company_id:
+        domain.append(('company_id', '=', company_id))
+    
+    partners = _odoo_rpc_call(
+        model='res.partner',
+        method='search_read',
+        args_list=[domain],
+        kwargs_dict={'fields': ['id', 'name', 'email', 'phone', 'mobile', 'street', 'street2', 'city', 'state_id', 'zip', 'country_id', 'is_company', 'parent_id', 'type', 'vat', 'company_id', 'customer_rank', 'supplier_rank'], 'limit': 1}
+    )
+    if partners:
+        return partners[0]
+    return None
 
 def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     """
@@ -124,9 +144,8 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     partners = _odoo_rpc_call(
         "res.partner", 
         "search_read",
-        domain=[("name", "=", name)],
-        fields=["id"],
-        limit=1
+        args_list=[[['name', '=', name]]],  # Domain is the first positional arg, wrapped in a list
+        kwargs_dict={"fields": ["id"], "limit": 1}
     )
     
     if partners:
@@ -153,7 +172,7 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
         partner_data["customer_rank"] = 1 # Default to customer
 
 
-    new_partner_id = _odoo_rpc_call("res.partner", "create", args=[partner_data])
+    new_partner_id = _odoo_rpc_call("res.partner", "create", args_list=[partner_data])
     if new_partner_id:
         logger.info(f"Partner '{name}' created with ID: {new_partner_id}")
     
@@ -193,10 +212,9 @@ def ensure_product_exists(model_code: str, description: str,
     products = _odoo_rpc_call(
         "product.product",
         "search_read", 
-        domain=[("default_code", "=", model_code)],
+        args_list=[["default_code", "=", model_code]],
         # Fetch fields from product.product and its related product.template
-        fields=["id", "product_tmpl_id", "lst_price", "standard_price", "type"], 
-        limit=1
+        kwargs_dict={"fields": ["id", "product_tmpl_id", "lst_price", "standard_price", "type"], "limit": 1}
     )
 
     product_id_to_update = None
@@ -216,7 +234,7 @@ def ensure_product_exists(model_code: str, description: str,
         # Check and update sales price (lst_price on product.template)
         if sales_price is not None:
             # Need to read template's current lst_price if not directly on product.product
-            current_template_data = _odoo_rpc_call("product.template", "read", args=[template_id_to_update], kwargs_rpc={"fields": ["lst_price", "type"]})
+            current_template_data = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["lst_price", "type"]})
             current_sales_price = current_template_data[0]['lst_price'] if current_template_data and current_template_data[0] else None
             if sales_price != current_sales_price:
                 logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) sales price from {current_sales_price} to {sales_price}")
@@ -228,7 +246,7 @@ def ensure_product_exists(model_code: str, description: str,
         if purchase_cost is not None:
             current_cost_price = product_record.get('standard_price') # product.product might have it
             if template_id_to_update and current_cost_price is None: # Fallback to template if not on product
-                 current_template_data_cost = _odoo_rpc_call("product.template", "read", args=[template_id_to_update], kwargs_rpc={"fields": ["standard_price"]})
+                 current_template_data_cost = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["standard_price"]})
                  current_cost_price = current_template_data_cost[0]['standard_price'] if current_template_data_cost and current_template_data_cost[0] else None
 
             if purchase_cost != current_cost_price:
@@ -238,14 +256,14 @@ def ensure_product_exists(model_code: str, description: str,
         
         # Check and update product type (on product.template)
         if odoo_product_type:
-            current_template_data_type = _odoo_rpc_call("product.template", "read", args=[template_id_to_update], kwargs_rpc={"fields": ["type"]})
+            current_template_data_type = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["type"]})
             current_type = current_template_data_type[0]['type'] if current_template_data_type and current_template_data_type[0] else None
             if odoo_product_type != current_type:
                 logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) type from {current_type} to {odoo_product_type}")
                 update_values_template["type"] = odoo_product_type
 
         if update_values_template and template_id_to_update:
-            _odoo_rpc_call("product.template", "write", args=[[template_id_to_update], update_values_template])
+            _odoo_rpc_call("product.template", "write", args_list=[[template_id_to_update], update_values_template])
             logger.info(f"Updated product.template {template_id_to_update} for '{model_code}'.")
         # No product.product specific fields to update in this logic yet, but structure is there.
 
@@ -270,7 +288,7 @@ def ensure_product_exists(model_code: str, description: str,
         product_template_data["standard_price"] = purchase_cost
 
     # Create the product.template first
-    new_template_id = _odoo_rpc_call("product.template", "create", args=[product_template_data])
+    new_template_id = _odoo_rpc_call("product.template", "create", args_list=[product_template_data])
     
     if not new_template_id:
         logger.error(f"Failed to create product.template for '{model_code}'.")
@@ -283,9 +301,8 @@ def ensure_product_exists(model_code: str, description: str,
     created_products = _odoo_rpc_call(
         "product.product",
         "search_read",
-        domain=[("product_tmpl_id", "=", new_template_id), ("default_code", "=", model_code)],
-        fields=["id"],
-        limit=1
+        args_list=[["product_tmpl_id", "=", new_template_id], ["default_code", "=", model_code]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
     )
 
     if created_products:
@@ -335,9 +352,8 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
     accounts = _odoo_rpc_call(
         "account.account",
         "search_read",
-        domain=[("code", "=", odoo_account_code)],
-        fields=["id", "name"],
-        limit=1
+        args_list=[["code", "=", odoo_account_code]],
+        kwargs_dict={"fields": ["id", "name"], "limit": 1}
     )
 
     if accounts:
@@ -356,9 +372,8 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
     account_types = _odoo_rpc_call(
         "account.account.type",
         "search_read",
-        domain=[("name", "ilike", odoo_account_type_str)],
-        fields=["id", "name"],
-        limit=1
+        args_list=[["name", "ilike", odoo_account_type_str]],
+        kwargs_dict={"fields": ["id", "name"], "limit": 1}
     )
 
     if not account_types:
@@ -376,7 +391,7 @@ def ensure_account_exists(qb_account_full_name: str, account_type_hint: Optional
         "reconcile": odoo_account_map.get("reconcile", False)
     }
     
-    new_account_id = _odoo_rpc_call("account.account", "create", args=[account_data])
+    new_account_id = _odoo_rpc_call("account.account", "create", args_list=[account_data])
     if new_account_id:
         logger.info(f"Odoo Account '{odoo_account_code}' created with ID: {new_account_id}")
     
@@ -399,9 +414,8 @@ def ensure_journal_exists(journal_name: str) -> Optional[int]:
     journals = _odoo_rpc_call(
         "account.journal",
         "search_read",
-        domain=[("name", "=", journal_name), ("type", "in", ["general", "sale", "purchase"])],
-        fields=["id", "name"],
-        limit=1
+        args_list=[["name", "=", journal_name], ["type", "in", ["general", "sale", "purchase"]]],
+        kwargs_dict={"fields": ["id", "name"], "limit": 1}
     )
     
     if journals:
@@ -456,7 +470,7 @@ def create_odoo_journal_entry(entry_data: Dict[str, Any]) -> Optional[int]:
     move_id = _odoo_rpc_call(
         model="account.move",
         method="create",
-        args=[move_data]
+        args_list=[move_data]
     )
     
     if move_id:
@@ -504,9 +518,8 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         journals = _odoo_rpc_call(
             "account.journal",
             "search_read",
-            domain=[("type", "=", "sale")],
-            fields=["id"],
-            limit=1
+            args_list=[["type", "=", "sale"]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
         )
         if journals:
             sales_journal_id = journals[0]["id"]
@@ -537,14 +550,14 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
             odoo_line_account_id = ensure_account_exists(line_account_name_qb, account_type_hint="income")
         elif product_id: # If product exists, try to get its income account from Odoo product.template
             product_template_info = _odoo_rpc_call(
-                "product.product", "read", args=[product_id], kwargs_rpc={"fields": ["property_account_income_id", "product_tmpl_id"]}
+                "product.product", "read", args_list=[product_id], kwargs_dict={"fields": ["property_account_income_id", "product_tmpl_id"]}
             )
             if product_template_info and product_template_info[0].get("property_account_income_id"):
                 odoo_line_account_id = product_template_info[0]["property_account_income_id"][0] # It's a tuple (id, name)
             elif product_template_info and product_template_info[0].get("product_tmpl_id"): # Check template
                  template_id = product_template_info[0]["product_tmpl_id"][0]
                  template_info_full = _odoo_rpc_call(
-                    "product.template", "read", args=[template_id], kwargs_rpc={"fields": ["property_account_income_id"]}
+                    "product.template", "read", args_list=[template_id], kwargs_dict={"fields": ["property_account_income_id"]}
                  )
                  if template_info_full and template_info_full[0].get("property_account_income_id"):
                      odoo_line_account_id = template_info_full[0]["property_account_income_id"][0]
@@ -626,9 +639,8 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         existing_invoices = _odoo_rpc_call(
             model="account.move",
             method="search_read",
-            domain=[("x_qb_txn_id", "=", qb_invoice_data.get("qb_txn_id")), ("move_type", "=", "out_invoice")],
-            fields=["id"],
-            limit=1
+            args_list=[["x_qb_txn_id", "=", qb_invoice_data.get("qb_txn_id")], ["move_type", "=", "out_invoice"]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
         )
         if existing_invoices:
             existing_invoice_id = existing_invoices[0]["id"]
@@ -646,7 +658,7 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         success = _odoo_rpc_call(
             model="account.move",
             method="write",
-            args=[[existing_invoice_id], update_payload]
+            args_list=[[existing_invoice_id], update_payload]
         )
         if success:
             logger.info(f"Successfully updated Odoo invoice ID: {existing_invoice_id}")
@@ -674,7 +686,7 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         new_invoice_id = _odoo_rpc_call(
             model="account.move",
             method="create",
-            args=[odoo_invoice_payload]
+            args_list=[odoo_invoice_payload]
         )
         if new_invoice_id:
             logger.info(f"Successfully created Odoo invoice with ID: {new_invoice_id} for QB TxnID: {qb_invoice_data.get('qb_txn_id')}")
@@ -718,9 +730,8 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
         journals = _odoo_rpc_call(
             "account.journal",
             "search_read",
-            domain=[("type", "=", "purchase")],
-            fields=["id", "name"],
-            limit=1
+            args_list=[["type", "=", "purchase"]],
+            kwargs_dict={"fields": ["id", "name"], "limit": 1}
         )
         if journals:
             purchase_journal_id = journals[0]["id"]
@@ -758,14 +769,14 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
             odoo_line_account_id = ensure_account_exists(line_account_name_qb, account_type_hint="expense")
         elif product_id: # If product exists, try to get its expense account from Odoo product
             product_info = _odoo_rpc_call(
-                "product.product", "read", args=[product_id], kwargs_rpc={"fields": ["property_account_expense_id", "product_tmpl_id"]}
+                "product.product", "read", args_list=[product_id], kwargs_dict={"fields": ["property_account_expense_id", "product_tmpl_id"]}
             )
             if product_info and product_info[0].get("property_account_expense_id"):
                 odoo_line_account_id = product_info[0]["property_account_expense_id"][0]
             elif product_info and product_info[0].get("product_tmpl_id"): # Check template
                  template_id = product_info[0]["product_tmpl_id"][0]
                  template_info_full = _odoo_rpc_call(
-                    "product.template", "read", args=[template_id], kwargs_rpc={"fields": ["property_account_expense_id"]}
+                    "product.template", "read", args_list=[template_id], kwargs_dict={"fields": ["property_account_expense_id"]}
                  )
                  if template_info_full and template_info_full[0].get("property_account_expense_id"):
                      odoo_line_account_id = template_info_full[0]["property_account_expense_id"][0]
@@ -856,9 +867,8 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
         existing_bills = _odoo_rpc_call(
             model="account.move",
             method="search_read",
-            domain=[("x_qb_txn_id", "=", qb_bill_data.get("qb_txn_id")), ("move_type", "=", "in_invoice")],
-            fields=["id"],
-            limit=1
+            args_list=[["x_qb_txn_id", "=", qb_bill_data.get("qb_txn_id")], ["move_type", "=", "in_invoice"]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
         )
         if existing_bills:
             existing_bill_id = existing_bills[0]["id"]
@@ -875,7 +885,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
         success = _odoo_rpc_call(
             model="account.move",
             method="write",
-            args=[[existing_bill_id], update_payload]
+            args_list=[[existing_bill_id], update_payload]
         )
         if success:
             logger.info(f"Successfully updated Odoo bill ID: {existing_bill_id}")
@@ -901,7 +911,7 @@ def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
         new_bill_id = _odoo_rpc_call(
             model="account.move",
             method="create",
-            args=[odoo_bill_payload]
+            args_list=[odoo_bill_payload]
         )
         if new_bill_id:
             logger.info(f"Successfully created Odoo bill with ID: {new_bill_id} for QB TxnID: {qb_bill_data.get('qb_txn_id')}")
