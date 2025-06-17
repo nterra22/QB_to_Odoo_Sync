@@ -193,11 +193,16 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
         partner_data["customer_rank"] = 1 # Default to customer
 
 
-    new_partner_id = _odoo_rpc_call("res.partner", "create", args_list=[partner_data])
-    if new_partner_id:
-        logger.info(f"Partner '{name}' created with ID: {new_partner_id}")
-    
-    return new_partner_id
+    try:
+        new_partner_id = _odoo_rpc_call("res.partner", "create", args_list=[partner_data])
+        if new_partner_id:
+            logger.info(f"Partner '{name}' created with ID: {new_partner_id}")
+        else:
+            logger.error(f"Failed to create partner '{name}'. Odoo returned no ID.")
+        return new_partner_id
+    except Exception as e:
+        logger.error(f"Exception while creating partner '{name}': {e}", exc_info=True)
+        return None
 
 # --- START OF REORGANIZED AND FIXED PARTNER AND PRODUCT LOGIC ---
 def get_odoo_country_id(country_identifier: str) -> Optional[int]:
@@ -335,19 +340,29 @@ def get_odoo_payment_term_id(payment_term_name: str) -> Optional[int]:
         )
         if terms_ilike:
             logger.info(f"Found payment term using 'ilike' for '{name_to_search}'. ID: {terms_ilike[0]['id']}")
-            return terms_ilike[0]["id"]
+            return terms_ilike[0]['id']
         
         logger.warning(f"Odoo payment term not found for name: '{name_to_search}'.")
         return None
 
-def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any]) -> Optional[int]:
+def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any], is_supplier: bool = False) -> Optional[int]:
     """
     Creates or updates a partner in Odoo from QuickBooks customer data.
     Uses field_mapping.json for mapping QB fields to Odoo fields.
     Handles creation of new partners and updates to existing ones based on QB ListID (ref in Odoo).
+    If ParentRef_ListID is present in qb_customer_data, it's a job and will be skipped.
+    Args:
+        qb_customer_data: Dictionary containing data from QB CustomerRet or VendorRet.
+        is_supplier: Boolean flag, True if the data is for a vendor.
     """
-    logger.info(f"Processing QB Customer/Partner: {qb_customer_data.get('Name', 'N/A')}, ListID: {qb_customer_data.get('ListID', 'N/A')}")
-    # logger.debug(f"Full QB Customer data: {qb_customer_data}") # Uncomment for detailed debugging
+    logger.info(f"Processing QB Partner Data: Name='{qb_customer_data.get('Name', 'N/A')}', FullName='{qb_customer_data.get('FullName', 'N/A')}', ListID='{qb_customer_data.get('ListID', 'N/A')}', IsSupplier='{is_supplier}'")
+
+    # Check if this is a job (has a ParentRef_ListID). If so, skip creating/updating it as a partner.
+    # This check is primarily for customer records that are jobs.
+    # Vendors typically don't have ParentRef_ListID in the same way.
+    if not is_supplier and qb_customer_data.get("ParentRef_ListID"):
+        logger.info(f"QB record '{qb_customer_data.get('FullName', qb_customer_data.get('Name', 'N/A'))}' (ListID: {qb_customer_data.get('ListID')}) is a job (has ParentRef_ListID). Skipping partner creation/update in Odoo.")
+        return None # Indicates skipped
 
     if not FIELD_MAPPING:
         logger.error("Field mapping not loaded. Cannot process partner.")
@@ -501,8 +516,26 @@ def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any]) -> Optional[
 
     # 4. Set customer/supplier ranks
     customer_defaults = customer_mapping_config.get("default_values", {})
-    if "customer_rank" not in odoo_payload: # Only if not set by a direct mapping
-        odoo_payload["customer_rank"] = customer_defaults.get("customer_rank", 1)
+    
+    # Determine if it's a customer based on QB data (for CustomerRet) or if not a supplier
+    # For CustomerRet, 'IsActive' implies it's a customer.
+    # For VendorRet, it's not a customer unless explicitly stated or handled by dual roles in QB.
+    is_actually_customer = not is_supplier # If it's from CustomerQuery, it's a customer.
+
+    if "customer_rank" not in odoo_payload:
+        if is_actually_customer:
+            odoo_payload["customer_rank"] = customer_defaults.get("customer_rank", 1)
+        else: # If it's a vendor, set customer_rank to 0 unless QB data indicates it's also a customer
+            # This part might need more sophisticated logic if a QB Vendor can also be a Customer
+            # For now, if is_supplier is true, customer_rank is 0 by default.
+            odoo_payload["customer_rank"] = 0 
+
+    if "supplier_rank" not in odoo_payload:
+        if is_supplier:
+            odoo_payload["supplier_rank"] = customer_defaults.get("supplier_rank", 1) # Default for vendors
+        else:
+            odoo_payload["supplier_rank"] = 0
+
 
     # 5. Ensure 'ref' is set for linking with QB ListID
     odoo_payload["ref"] = qb_list_id
@@ -928,7 +961,7 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
     
     odoo_partner_id = ensure_partner_exists(name=customer_name, is_customer=True, is_supplier=False)
     if not odoo_partner_id:
-        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}.")
+        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}. Invoice will be skipped. Please check Odoo partner creation logic and logs for details.")
         return None
 
     # Determine Odoo journal
@@ -1216,7 +1249,7 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
     
     odoo_partner_id = ensure_partner_exists(name=customer_name, is_customer=True, is_supplier=False)
     if not odoo_partner_id:
-        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}.")
+        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}. Credit memo will be skipped. Please check Odoo partner creation logic and logs for details.")
         return None
 
     # Determine Odoo journal (typically the same sales journal as invoices)

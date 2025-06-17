@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional
+import json
 
 # Remove import of MAX_JOURNAL_ENTRIES_PER_REQUEST from config
 MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
@@ -45,6 +46,7 @@ from .odoo_service import (
     create_or_update_odoo_purchase_order, # New
     create_or_update_odoo_journal_entry # New
 )
+# from ..utils.data_loader import is_record_changed, update_sync_cache # Import cache functions
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,23 @@ QBWC_PASSWORD = "odoo123"
 # QBWC Service State (for iterator management)
 qbwc_session_state: Dict[str, Dict[str, Any]] = {}
 
+SESSION_STATE_FILE = 'qbwc_session_state.json'
+
+def load_qbwc_session_state():
+    global qbwc_session_state
+    try:
+        with open(SESSION_STATE_FILE, 'r') as f:
+            qbwc_session_state.clear()
+            qbwc_session_state.update(json.load(f))
+    except Exception:
+        qbwc_session_state.clear()
+
+def save_qbwc_session_state():
+    try:
+        with open(SESSION_STATE_FILE, 'w') as f:
+            json.dump(qbwc_session_state, f, default=str)
+    except Exception as e:
+        logger.error(f"Failed to save QBWC session state: {e}")
 
 def _get_xml_text(element: Optional[ET.Element], default: Optional[str] = None) -> Optional[str]:
     """Safely get text from an XML element."""
@@ -152,25 +171,28 @@ class QBWCService(ServiceBase):
             
             session_key = f"ticket_{int(datetime.now().timestamp())}_{strUserName}"
             
-            today_date_str = datetime.now().strftime('%Y-%m-%d')
-            # More robust date range, e.g., last 7 days or configurable
-            # For now, sticking to today for simplicity in this phase
-            # from_date_str = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d') 
-            
             initial_tasks = [
                 {
                     "type": QB_QUERY, 
                     "entity": CUSTOMER_QUERY, 
                     "requestID": "1",
                     "iteratorID": None,
-                    "params": {} # No specific params for full customer list initially
+                    "params": { 
+                        "ModifiedDateRangeFilter": { # Keep this for customers
+                            "FromModifiedDate": "1980-01-01" 
+                        }
+                    }
                 },
                 {
                     "type": QB_QUERY,
                     "entity": VENDOR_QUERY,
                     "requestID": "1",
                     "iteratorID": None,
-                    "params": {} # No specific params for full vendor list initially
+                    "params": { # Keep this for vendors
+                        "ModifiedDateRangeFilter": {
+                            "FromModifiedDate": "1980-01-01"
+                        }
+                    }
                 },
                 # { # Example for ItemQuery if added later
                 #     "type": QB_QUERY,
@@ -185,12 +207,7 @@ class QBWCService(ServiceBase):
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": { # Filter by transaction date
-                            "FromTxnDate": today_date_str, # Or from_date_str for a wider range
-                            "ToTxnDate": today_date_str
-                        },
-                        "IncludeLineItems": "true",
-                        # "PaidStatus": "NotPaidOnly" # Example: if you only want unpaid invoices
+                        "IncludeLineItems": "true" # No date filter, fetch all
                     }
                 },
                 {
@@ -199,10 +216,7 @@ class QBWCService(ServiceBase):
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        },
+                        # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true",
                     }
                 },
@@ -212,65 +226,50 @@ class QBWCService(ServiceBase):
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        }
+                        # "TxnDateRangeFilter" removed
+                        # IncludeLineItems is added in sendRequestXML for this query type
                     }
                 },
                 {
                     "type": QB_QUERY,
-                    "entity": CREDITMEMO_QUERY, # New
+                    "entity": CREDITMEMO_QUERY, 
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        },
+                        # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true"
                     }
                 },
                 {
                     "type": QB_QUERY,
-                    "entity": SALESORDER_QUERY, # New
+                    "entity": SALESORDER_QUERY, 
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        },
+                        # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true"
                     }
                 },
                 {
                     "type": QB_QUERY,
-                    "entity": PURCHASEORDER_QUERY, # New
+                    "entity": PURCHASEORDER_QUERY, 
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        },
+                        # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true"
                     }
                 },
                 {
                     "type": QB_QUERY,
-                    "entity": JOURNALENTRY_QUERY, # New
+                    "entity": JOURNALENTRY_QUERY, 
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "TxnDateRangeFilter": {
-                            "FromTxnDate": today_date_str,
-                            "ToTxnDate": today_date_str
-                        },
-                        "IncludeLineItems": "true" # JournalEntry lines are crucial
+                        # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true" 
                     }
                 }
-                # TODO: Add tasks for SalesOrderQuery, PurchaseOrderQuery etc.
                 # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
             ]
 
@@ -291,21 +290,29 @@ class QBWCService(ServiceBase):
     @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
+        load_qbwc_session_state()
         logger.debug("Method sendRequestXML called")
+        logger.info(f"sendRequestXML invoked with ticket: {ticket}") # Added logging
+
         session_data = qbwc_session_state.get(ticket)
+        logger.info(f"sendRequestXML: Retrieved session_data: {session_data}") # Added logging
+
         if not session_data:
-            logger.error(f"sendRequestXML: Invalid ticket {ticket}")
+            logger.error(f"sendRequestXML: Invalid ticket {ticket}. No session data found.") # Enhanced logging
             return "" # Return empty string if no valid session
 
         # Store company file and QBXML version info from QBWC
         session_data["company_file_name"] = strCompanyFileName
         session_data["qbxml_version"] = f"{qbXMLMajorVers}.{qbXMLMinorVers}"
+        logger.info(f"sendRequestXML: CompanyFileName='{strCompanyFileName}', QBXMLVersion='{session_data['qbxml_version']}'") # Added logging
 
         task_queue = session_data.get("task_queue", [])
         current_task_index = session_data.get("current_task_index", 0)
+        logger.info(f"sendRequestXML: Task Queue (length {len(task_queue)}): {task_queue}") # Added logging
+        logger.info(f"sendRequestXML: Current Task Index: {current_task_index}") # Added logging
 
         if current_task_index >= len(task_queue):
-            logger.info("All tasks completed for this session.")
+            logger.info("sendRequestXML: All tasks completed for this session or task queue is empty initially.") # Enhanced logging
             # Optionally, here you could trigger fetching changes from Odoo
             # and populate the queue with new tasks to send data to QB.
             # For now, we signal no more requests.
@@ -313,6 +320,7 @@ class QBWCService(ServiceBase):
 
         current_task = task_queue[current_task_index]
         session_data["active_task"] = current_task # Store active task for receiveResponseXML
+        save_qbwc_session_state()
 
         xml_request = ""
         request_id_str = current_task.get("requestID", "1") # Default to "1"
@@ -351,8 +359,6 @@ class QBWCService(ServiceBase):
 </QBXML>'''
                 else:
                     logger.info("Starting new CustomerQueryRq.")
-                    # params = current_task.get("params", {})
-                    # active_status_filter = f"<ActiveStatus>{params['ActiveStatus']}</ActiveStatus>" if "ActiveStatus" in params else ""
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
 <?qbxml version="{session_data["qbxml_version"]}"?>
 <QBXML>
@@ -391,13 +397,10 @@ class QBWCService(ServiceBase):
 
             elif entity == INVOICE_QUERY:
                 params = current_task.get("params", {})
+                # Remove date filter XML generation
+                modified_date_filter_xml = ""
                 txn_date_filter_xml = ""
-                if "TxnDateRangeFilter" in params:
-                    txn_date_filter_xml = f'''<TxnDateRangeFilter>
-        <FromTxnDate>{params["TxnDateRangeFilter"]["FromTxnDate"]}</FromTxnDate>
-        <ToTxnDate>{params["TxnDateRangeFilter"]["ToTxnDate"]}</ToTxnDate>
-      </TxnDateRangeFilter>'''
-                
+
                 include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
                 owner_id_xml = f'''<OwnerID>{params["OwnerID"]}</OwnerID>''' if "OwnerID" in params else ""
 
@@ -408,21 +411,20 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <InvoiceQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>100</MaxReturned> 
+      <MaxReturned>10</MaxReturned> 
     </InvoiceQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
                 else:
-                    logger.info(f"Starting new InvoiceQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    logger.info("Starting new InvoiceQueryRq without date filters.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
 <?qbxml version="{session_data["qbxml_version"]}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <InvoiceQueryRq requestID="{request_id_str}">
-      {txn_date_filter_xml}
       {include_line_items_xml}
       {owner_id_xml}
-      <MaxReturned>100</MaxReturned> 
+      <MaxReturned>10</MaxReturned> 
     </InvoiceQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -491,7 +493,7 @@ class QBWCService(ServiceBase):
       <IncludeLineItems>true</IncludeLineItems> <!-- To see which invoices are paid -->
       <MaxReturned>50</MaxReturned>
     </ReceivePaymentQueryRq>
-  </QBXMLMsgsRq>
+  </QBXML>
 </QBXML>'''
 
             elif entity == CREDITMEMO_QUERY: # New
@@ -576,7 +578,7 @@ class QBWCService(ServiceBase):
       {include_line_items_xml}
       <MaxReturned>50</MaxReturned>
     </PurchaseOrderQueryRq>
-  </QBXMLMsgsRq>
+  </QBXML>
 </QBXML>'''
             elif entity == JOURNALENTRY_QUERY: # New
                 params = current_task.get("params", {})
@@ -617,37 +619,41 @@ class QBWCService(ServiceBase):
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def receiveResponseXML(self, ticket, response, hresult, message):
+        load_qbwc_session_state()
         logger.debug("Method receiveResponseXML called")
         logger.info(f"QBWC Service: receiveResponseXML called. Ticket: {ticket}")
-        # Log first 1000 chars of response for brevity in general logs
-        logger.debug(f"Received QBXML response (first 1000 chars): {response[:1000] if response else 'Empty response'}")
-        if len(response) > 1000:
-            logger.debug("Full QBXML response is longer and logged separately if detailed debug is enabled for XML.")
 
         session_data = qbwc_session_state.get(ticket)
         if not session_data:
-            logger.error(f"receiveResponseXML: Invalid ticket {ticket}")
-            return "0" # Error or no progress
+            logger.error(f"receiveResponseXML: Invalid ticket {ticket}. No session data found.")
+            return "0"  # Error
 
         active_task = session_data.get("active_task")
         if not active_task:
-            logger.error("receiveResponseXML: No active task found for this session.")
+            logger.error(f"receiveResponseXML: No active task found for ticket {ticket}.")
+            return "0"  # Error
+
+        logger.debug(f"Received QBXML response (first 1000 chars): {response[:1000] if response else 'Empty response'}")
+
+        if hresult:
+            logger.error(f"receiveResponseXML received an error from QBWC. HRESULT: {hresult}, Message: {message}")
+            session_data["last_error"] = f"QBWC Error: {message}"
+            session_data["current_task_index"] += 1
+            save_qbwc_session_state()
             return "0"
 
-        progress = 0 # Default progress
-
+        progress = 0
         try:
             if not response:
-                logger.warning(f"Received empty response for task: {active_task}")
-                # Consider this an end of this step or an error
-                active_task["iteratorID"] = None # Clear iterator
-                session_data["current_task_index"] += 1 # Move to next task
-                progress = 100 # Mark this step as complete
+                logger.warning(f"Received empty response for task: {active_task}. This may be normal if the query returned no data.")
+                session_data["current_task_index"] += 1
+                logger.info(f"Incremented current_task_index to {session_data['current_task_index']} after empty response.")
+                progress = 100
+                save_qbwc_session_state()
                 return str(progress)
 
             root = ET.fromstring(response)
             
-            # Generic response processing based on active_task type and entity
             if active_task["type"] == QB_QUERY:
                 entity = active_task["entity"]
                 
@@ -658,26 +664,41 @@ class QBWCService(ServiceBase):
                         status_message = customer_query_rs.get('statusMessage', 'N/A')
                         logger.info(f"CustomerQueryRs status: {status_code} - {status_message}")
 
-                        if status_code == '0': # Success
+                        if status_code == '0':
                             customers = customer_query_rs.findall('.//CustomerRet')
                             logger.info(f"Received {len(customers)} customers in this response.")
-                            for cust_xml in customers: # Renamed cust to cust_xml for clarity
-                                list_id_elem = cust_xml.find('ListID') # Corrected: use cust_xml
+                            for cust_xml in customers:
+                                list_id_elem = cust_xml.find('ListID') 
                                 customer_list_id = list_id_elem.text if list_id_elem is not None else 'N/A'
+                                time_modified_elem = cust_xml.find('TimeModified')
+                                customer_time_modified = time_modified_elem.text if time_modified_elem is not None else datetime.now().isoformat()
                                 
+                                parent_ref_list_id_elem = cust_xml.find('ParentRef/ListID')
+                                is_job = parent_ref_list_id_elem is not None and parent_ref_list_id_elem.text
+
+                                if not customer_list_id or customer_list_id == 'N/A':
+                                    logger.warning("Customer record found with no ListID. Skipping.")
+                                    continue
+
+                                if is_job:
+                                    full_name_elem = cust_xml.find('FullName')
+                                    job_full_name = full_name_elem.text if full_name_elem is not None else customer_list_id
+                                    logger.info(f"QB record '{job_full_name}' (ListID: {customer_list_id}) is a job. Skipping Odoo partner creation.")
+                                    continue
+
                                 qb_customer_data = _extract_customer_data_from_ret(cust_xml)
                                 
                                 customer_name_for_log = qb_customer_data.get("Name", qb_customer_data.get("FullName", f"ListID: {customer_list_id}"))
 
-                                if qb_customer_data: # Ensure data was extracted
+                                if qb_customer_data:
                                     logger.info(f"  Processing Customer: {customer_name_for_log} (ListID: {customer_list_id})")
                                     logger.debug(f"    Extracted QB Customer Data: {qb_customer_data}")
                                     try:
-                                        odoo_partner_id = create_or_update_odoo_partner(qb_customer_data)
+                                        odoo_partner_id = create_or_update_odoo_partner(qb_customer_data, is_supplier=False)
                                         if odoo_partner_id:
                                             logger.info(f"    Successfully processed customer '{customer_name_for_log}' for Odoo. Odoo Partner ID: {odoo_partner_id}")
                                         else:
-                                            logger.warning(f"    Could not create or update Odoo partner for '{customer_name_for_log}'.")
+                                            logger.warning(f"    Could not create or update Odoo partner for '{customer_name_for_log}' (it might have been skipped if it's a job, or an error occurred).")
                                     except Exception as e:
                                         logger.error(f"    Error processing customer '{customer_name_for_log}' for Odoo: {e}", exc_info=True)
                                 else:
@@ -688,20 +709,19 @@ class QBWCService(ServiceBase):
                             
                             if iterator_id and iterator_remaining_count and int(iterator_remaining_count) > 0:
                                 active_task["iteratorID"] = iterator_id
-                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1) # Increment requestID for next iteration call
-                                # Progress can be estimated if total is known, otherwise 50% if iterating
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
                                 progress = 50 
                                 logger.info(f"Customer iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
                             else:
                                 logger.info("Customer iteration complete or no iterator.")
                                 active_task["iteratorID"] = None
-                                session_data["current_task_index"] += 1 # Move to next task
+                                session_data["current_task_index"] += 1
                                 progress = 100
                         else:
                             logger.error(f"CustomerQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             session_data["last_error"] = f"CustomerQuery Error: {status_message}"
                             active_task["iteratorID"] = None
-                            session_data["current_task_index"] += 1 # Move to next task, even on error
+                            session_data["current_task_index"] += 1
                             progress = 100 
                     else:
                         logger.warning("Could not find CustomerQueryRs in the response.")
@@ -716,28 +736,50 @@ class QBWCService(ServiceBase):
                         status_message = vendor_query_rs.get('statusMessage', 'N/A')
                         logger.info(f"VendorQueryRs status: {status_code} - {status_message}")
 
-                        if status_code == '0': # Success
+                        if status_code == '0':
                             vendors = vendor_query_rs.findall('.//VendorRet')
                             logger.info(f"Received {len(vendors)} vendors in this response.")
-                            for vend in vendors:
-                                list_id_elem = vend.find('ListID')
-                                name_elem = vend.find('Name')
+                            for vend_xml in vendors:
+                                list_id_elem = vend_xml.find('ListID')
+                                vendor_list_id = list_id_elem.text if list_id_elem is not None else 'N/A'
+                                time_modified_elem = vend_xml.find('TimeModified')
+                                vendor_time_modified = time_modified_elem.text if time_modified_elem is not None else datetime.now().isoformat()
+                                
+                                name_elem = vend_xml.find('Name')
                                 vendor_name = name_elem.text if name_elem is not None and name_elem.text else None
+
+                                if not vendor_list_id or vendor_list_id == 'N/A':
+                                    logger.warning("Vendor record found with no ListID. Skipping.")
+                                    continue
+
                                 if vendor_name:
-                                    logger.info(f"  Processing Vendor: {vendor_name} (ListID: {list_id_elem.text if list_id_elem is not None else 'N/A'})")
+                                    logger.info(f"  Processing Vendor: {vendor_name} (ListID: {vendor_list_id})")
                                     try:
-                                        # Using ensure_partner_exists for vendors too.
-                                        # Might need a specific ensure_vendor_exists if Odoo distinction is critical (e.g. supplier flags)
-                                        odoo_vendor_id = ensure_partner_exists(name=vendor_name, is_supplier=True) # Pass is_supplier hint
+                                        qb_vendor_data = {
+                                            "ListID": vendor_list_id,
+                                            "TimeModifiedQB": vendor_time_modified,
+                                            "Name": vendor_name,
+                                            "FullName": _get_xml_text(vend_xml.find('FullName')),
+                                            "CompanyName": _get_xml_text(vend_xml.find('CompanyName')),
+                                            "FirstName": _get_xml_text(vend_xml.find('FirstName')),
+                                            "LastName": _get_xml_text(vend_xml.find('LastName')),
+                                            "Email": _get_xml_text(vend_xml.find('Email')),
+                                            "Phone": _get_xml_text(vend_xml.find('Phone')),
+                                            "IsActive": _get_xml_text(vend_xml.find('IsActive')) == 'true',
+                                        }
+
+                                        odoo_vendor_id = create_or_update_odoo_partner(qb_vendor_data, is_supplier=True)
+
                                         if odoo_vendor_id:
-                                            logger.info(f"    Ensured Odoo partner (vendor) for '{vendor_name}' exists with ID: {odoo_vendor_id}")
+                                            logger.info(f"    Successfully processed vendor '{vendor_name}' for Odoo. Odoo Partner ID: {odoo_vendor_id}")
                                         else:
-                                            logger.warning(f"    Could not ensure Odoo partner (vendor) for '{vendor_name}'.")
+                                            logger.warning(f"    Could not create or update Odoo partner (vendor) for '{vendor_name}'.")
                                     except Exception as e:
                                         logger.error(f"    Error processing vendor '{vendor_name}' for Odoo: {e}", exc_info=True)
                                 else:
                                     logger.warning(f"  Skipping vendor with missing name (ListID: {list_id_elem.text if list_id_elem is not None else 'N/A'}).")
                             
+
                             iterator_id = vendor_query_rs.get("iteratorID")
                             iterator_remaining_count = vendor_query_rs.get("iteratorRemainingCount")
                             
@@ -770,29 +812,42 @@ class QBWCService(ServiceBase):
                         status_message = invoice_query_rs.get('statusMessage', 'N/A')
                         logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
 
-                        if status_code == '0': # Success
+                        if status_code == '0':
                             invoices = invoice_query_rs.findall('.//InvoiceRet')
                             logger.info(f"Received {len(invoices)} invoices in this response.")
                             for inv_xml in invoices:
                                 txn_id_elem = inv_xml.find('TxnID')
-                                ref_number_elem = inv_xml.find('RefNumber')
+                                qb_invoice_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                
+                                if not qb_invoice_txn_id:
+                                    logger.warning("Invoice record found with no TxnID. Skipping.")
+                                    continue
+
                                 customer_ref_full_name_elem = inv_xml.find('CustomerRef/FullName')
+                                
+                                original_qb_customer_name = customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None
+                                final_customer_name_for_odoo = original_qb_customer_name
+                                
+                                if original_qb_customer_name and ':' in original_qb_customer_name:
+                                    parent_customer_name_from_job_string = original_qb_customer_name.split(':')[0].strip()
+                                    logger.info(f"Invoice {qb_invoice_txn_id} is for job '{original_qb_customer_name}'. Attempting to assign to parent customer '{parent_customer_name_from_job_string}'.")
+                                    final_customer_name_for_odoo = parent_customer_name_from_job_string
+
                                 txn_date_elem = inv_xml.find('TxnDate')
                                 due_date_elem = inv_xml.find('DueDate')
                                 memo_elem = inv_xml.find('Memo')
-                                bill_address_elem = inv_xml.find('BillAddress') # For more complete customer data if needed
-                                ship_address_elem = inv_xml.find('ShipAddress')
                                 is_paid_elem = inv_xml.find('IsPaid')
                                 subtotal_elem = inv_xml.find('Subtotal')
                                 sales_tax_total_elem = inv_xml.find('SalesTaxTotal')
-                                applied_amount_elem = inv_xml.find('AppliedAmount') # For payments applied
+                                applied_amount_elem = inv_xml.find('AppliedAmount')
                                 balance_remaining_elem = inv_xml.find('BalanceRemaining')
+                                ref_number_elem = inv_xml.find('RefNumber')
 
 
                                 qb_invoice_data = {
                                     "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
                                     "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
-                                    "customer_name": customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None,
+                                    "customer_name": final_customer_name_for_odoo,
                                     "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
                                     "due_date": due_date_elem.text if due_date_elem is not None else None,
                                     "memo": memo_elem.text if memo_elem is not None else None,
@@ -816,7 +871,6 @@ class QBWCService(ServiceBase):
                                     quantity_elem = line_xml.find('Quantity')
                                     rate_elem = line_xml.find('Rate')
                                     amount_elem = line_xml.find('Amount')
-                                    # TODO: Extract SalesTaxCodeRef, OverrideItemAccountRef if needed for Odoo mapping
 
                                     line_data = {
                                         "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
@@ -847,7 +901,7 @@ class QBWCService(ServiceBase):
                             else:
                                 logger.info("Invoice iteration complete or no iterator.")
                                 active_task["iteratorID"] = None
-                                session_data["current_task_index"] += 1 # Move to next task
+                                session_data["current_task_index"] += 1
                                 progress = 100
                         else:
                             logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
@@ -872,8 +926,14 @@ class QBWCService(ServiceBase):
                             logger.info(f"Received {len(bills)} bills in this response.")
                             for bill_xml in bills:
                                 txn_id_elem = bill_xml.find('TxnID')
+                                qb_bill_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_bill_txn_id:
+                                    logger.warning("Bill record found with no TxnID. Skipping.")
+                                    continue
+
                                 vendor_ref_full_name_elem = bill_xml.find('VendorRef/FullName')
-                                ref_number_elem = bill_xml.find('RefNumber') # Vendor Bill No.
+                                ref_number_elem = bill_xml.find('RefNumber')
                                 txn_date_elem = bill_xml.find('TxnDate')
                                 due_date_elem = bill_xml.find('DueDate')
                                 amount_due_elem = bill_xml.find('AmountDue')
@@ -888,7 +948,7 @@ class QBWCService(ServiceBase):
                                     "amount_due": float(amount_due_elem.text) if amount_due_elem is not None and amount_due_elem.text else 0.0,
                                     "memo": memo_elem.text if memo_elem is not None else None,
                                     "expense_lines": [],
-                                    "item_lines": [] # QB Bills can have both expense and item lines
+                                    "item_lines": []
                                 }
                                 logger.info(f"  Processing Bill TxnID: {qb_bill_data['qb_txn_id']}, Ref: {qb_bill_data['ref_number']}")
 
@@ -899,8 +959,7 @@ class QBWCService(ServiceBase):
                                 for line_xml in bill_xml.findall('.//ExpenseLineRet'):
                                     account_ref_full_name_elem = line_xml.find('AccountRef/FullName')
                                     amount_elem = line_xml.find('Amount')
-                                    memo_elem = line_xml.find('Memo') # Line memo
-                                    # TODO: CustomerRef, BillableStatus for job costing if needed
+                                    memo_elem = line_xml.find('Memo')
                                     expense_line_data = {
                                         "account_name": account_ref_full_name_elem.text if account_ref_full_name_elem is not None else None,
                                         "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
@@ -910,11 +969,10 @@ class QBWCService(ServiceBase):
 
                                 for line_xml in bill_xml.findall('.//ItemLineRet'):
                                     item_ref_full_name_elem = line_xml.find('ItemRef/FullName')
-                                    desc_elem = line_xml.find('Desc') # Usually copied from item
+                                    desc_elem = line_xml.find('Desc')
                                     quantity_elem = line_xml.find('Quantity')
                                     cost_elem = line_xml.find('Cost')
                                     amount_elem = line_xml.find('Amount')
-                                    # TODO: CustomerRef, BillableStatus for job costing
                                     item_line_data = {
                                         "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
                                         "description": desc_elem.text if desc_elem is not None else None,
@@ -966,12 +1024,17 @@ class QBWCService(ServiceBase):
                             logger.info(f"Received {len(payments)} payments in this response.")
                             for payment_xml in payments:
                                 txn_id_elem = payment_xml.find('TxnID')
+                                qb_payment_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_payment_txn_id:
+                                    logger.warning("Payment record found with no TxnID. Skipping.")
+                                    continue
+                                
                                 customer_ref_full_name_elem = payment_xml.find('CustomerRef/FullName')
                                 txn_date_elem = payment_xml.find('TxnDate')
-                                ref_number_elem = payment_xml.find('RefNumber') # Check / Pmt #
+                                ref_number_elem = payment_xml.find('RefNumber')
                                 total_amount_elem = payment_xml.find('TotalAmount')
                                 memo_elem = payment_xml.find('Memo')
-                                # PaymentMethodRef, DepositToAccountRef might be useful
 
                                 qb_payment_data = {
                                     "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
@@ -988,11 +1051,9 @@ class QBWCService(ServiceBase):
                                     logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} has no customer name. Skipping Odoo processing.")
                                     continue
                                 
-                                # AppliedToTxnRet shows which invoices/charges the payment is applied to
                                 for applied_txn_xml in payment_xml.findall('.//AppliedToTxnRet'):
-                                    applied_txn_id_elem = applied_txn_xml.find('TxnID') # TxnID of the Invoice
+                                    applied_txn_id_elem = applied_txn_xml.find('TxnID')
                                     payment_amount_elem = applied_txn_xml.find('PaymentAmount')
-                                    # DiscountAmount, DiscountAccountRef if discounts are used
                                     applied_data = {
                                         "applied_qb_invoice_txn_id": applied_txn_id_elem.text if applied_txn_id_elem is not None else None,
                                         "payment_amount": float(payment_amount_elem.text) if payment_amount_elem is not None and payment_amount_elem.text else 0.0
@@ -1030,18 +1091,25 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
                         progress = 100
 
-                elif entity == CREDITMEMO_QUERY: # New
+                elif entity == CREDITMEMO_QUERY:
                     credit_memo_query_rs = root.find('.//CreditMemoQueryRs')
                     if credit_memo_query_rs is not None:
                         status_code = credit_memo_query_rs.get('statusCode', 'unknown')
                         status_message = credit_memo_query_rs.get('statusMessage', 'N/A')
                         logger.info(f"CreditMemoQueryRs status: {status_code} - {status_message}")
 
-                        if status_code == '0': # Success
+                        if status_code == '0':
                             credit_memos = credit_memo_query_rs.findall('.//CreditMemoRet')
                             logger.info(f"Received {len(credit_memos)} credit memos in this response.")
                             for cm_xml in credit_memos:
-                                qb_cm_data = _extract_transaction_data(cm_xml, "CreditMemo") # Generic extractor
+                                txn_id_elem = cm_xml.find('TxnID')
+                                qb_cm_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_cm_txn_id:
+                                    logger.warning("Credit Memo record found with no TxnID. Skipping.")
+                                    continue
+                                
+                                qb_cm_data = _extract_transaction_data(cm_xml, "CreditMemo")
                                 logger.info(f"  Processing Credit Memo TxnID: {qb_cm_data.get('qb_txn_id')}, Ref: {qb_cm_data.get('ref_number')}")
                                 try:
                                     odoo_cm_id = create_or_update_odoo_credit_memo(qb_cm_data)
@@ -1074,7 +1142,7 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
                         progress = 100
                 
-                elif entity == SALESORDER_QUERY: # New
+                elif entity == SALESORDER_QUERY:
                     sales_order_query_rs = root.find('.//SalesOrderQueryRs')
                     if sales_order_query_rs is not None:
                         status_code = sales_order_query_rs.get('statusCode', 'unknown')
@@ -1085,6 +1153,13 @@ class QBWCService(ServiceBase):
                             sales_orders = sales_order_query_rs.findall('.//SalesOrderRet')
                             logger.info(f"Received {len(sales_orders)} sales orders in this response.")
                             for so_xml in sales_orders:
+                                txn_id_elem = so_xml.find('TxnID')
+                                qb_so_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_so_txn_id:
+                                    logger.warning("Sales Order record found with no TxnID. Skipping.")
+                                    continue
+                                
                                 qb_so_data = _extract_transaction_data(so_xml, "SalesOrder")
                                 logger.info(f"  Processing Sales Order TxnID: {qb_so_data.get('qb_txn_id')}, Ref: {qb_so_data.get('ref_number')}")
                                 try:
@@ -1118,7 +1193,7 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
                         progress = 100
 
-                elif entity == PURCHASEORDER_QUERY: # New
+                elif entity == PURCHASEORDER_QUERY:
                     purchase_order_query_rs = root.find('.//PurchaseOrderQueryRs')
                     if purchase_order_query_rs is not None:
                         status_code = purchase_order_query_rs.get('statusCode', 'unknown')
@@ -1129,6 +1204,13 @@ class QBWCService(ServiceBase):
                             purchase_orders = purchase_order_query_rs.findall('.//PurchaseOrderRet')
                             logger.info(f"Received {len(purchase_orders)} purchase orders in this response.")
                             for po_xml in purchase_orders:
+                                txn_id_elem = po_xml.find('TxnID')
+                                qb_po_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_po_txn_id:
+                                    logger.warning("Purchase Order record found with no TxnID. Skipping.")
+                                    continue
+                                
                                 qb_po_data = _extract_transaction_data(po_xml, "PurchaseOrder")
                                 logger.info(f"  Processing Purchase Order TxnID: {qb_po_data.get('qb_txn_id')}, Ref: {qb_po_data.get('ref_number')}")
                                 try:
@@ -1173,7 +1255,14 @@ class QBWCService(ServiceBase):
                             journal_entries = journal_entry_query_rs.findall('.//JournalEntryRet')
                             logger.info(f"Received {len(journal_entries)} journal entries in this response.")
                             for je_xml in journal_entries:
-                                qb_je_data = _extract_journal_entry_data(je_xml) # Specific extractor for JEs
+                                txn_id_elem = je_xml.find('TxnID')
+                                qb_je_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+
+                                if not qb_je_txn_id:
+                                    logger.warning("Journal Entry record found with no TxnID. Skipping.")
+                                    continue
+                                
+                                qb_je_data = _extract_journal_entry_data(je_xml)
                                 logger.info(f"  Processing Journal Entry TxnID: {qb_je_data.get('qb_txn_id')}, Ref: {qb_je_data.get('ref_number')}")
                                 try:
                                     odoo_je_id = create_or_update_odoo_journal_entry(qb_je_data)
@@ -1206,18 +1295,15 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
                         progress = 100
 
-                # Add processing for other QB_QUERY entity responses here (e.g. ItemQueryRs)
-            
-            # Add processing for QB_ADD_RS, QB_MOD_RS etc. in the future
-
         except ET.ParseError as e:
             logger.error(f"Error parsing XML response for task {active_task}: {e}. Response snippet: {response[:500] if response else 'Empty'}")
             entity_name_for_error = active_task.get('entity', 'unknown task') if active_task else 'unknown task'
             session_data["last_error"] = f"XML Parse Error in receiveResponseXML for {entity_name_for_error}"
             if active_task:
-                active_task["iteratorID"] = None # Stop iteration on parse error
-            session_data["current_task_index"] += 1 # Try to move to next task
-            return "0" # Error
+                active_task["iteratorID"] = None
+            session_data["current_task_index"] += 1
+            save_qbwc_session_state()
+            return "0"
         except Exception as e:
             logger.error(f"Unexpected error processing response for task {active_task}: {e}", exc_info=True)
             entity_name_for_error = active_task.get('entity', 'unknown task') if active_task else 'unknown task'
@@ -1225,25 +1311,14 @@ class QBWCService(ServiceBase):
             if active_task:
                 active_task["iteratorID"] = None
             session_data["current_task_index"] += 1
-            return "0" # Error
+            save_qbwc_session_state()
+            return "0"
             
-        # Determine overall progress if all tasks in the current queue are done
         if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
             logger.info("All tasks in the current queue are processed.")
-            # Here, we could decide to fetch from Odoo and repopulate the task queue,
-            # or if that was the last step, truly be 100% done for this QBWC update session.
-            # For now, if queue is exhausted, this cycle is 100% done.
             progress = 100
-        elif progress != 50 : # If not iterating, and not 100% done with all tasks, calculate intermediate progress
-            # Simple progress: percentage of tasks completed.
-            # This might not be what QBWC expects if it wants progress for the *current* request.
-            # The 'progress' returned should ideally be for the current step QBWC is waiting on.
-            # If a task is 100% done (like a non-iterated query, or last iteration),
-            # and there are more tasks, QBWC will call sendRequestXML again immediately.
-            # So, returning 100 for a completed task is fine.
-            pass
-
-
+        
+        save_qbwc_session_state()
         logger.info(f"receiveResponseXML returning progress: {progress}% for task: {active_task.get('entity', 'N/A')}")
         return str(progress)
 
@@ -1381,6 +1456,7 @@ def _extract_journal_entry_data(je_xml_element: ET.Element) -> Dict[str, Any]:
         "txn_date": _extract_text(je_xml_element, 'TxnDate'),
         "memo": _extract_text(je_xml_element, 'Memo'), # Top-level memo
         "qbd_object_type": "JournalEntry",
+
         "lines": []
     }
 
