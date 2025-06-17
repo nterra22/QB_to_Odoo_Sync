@@ -639,6 +639,9 @@ class QBWCService(ServiceBase):
             return "0"  # Error
 
         logger.debug(f"Received QBXML response (first 1000 chars): {response[:1000] if response else 'Empty response'}")
+        
+        task_queue = session_data.get("task_queue", [])
+        total_tasks = len(task_queue)
 
         if hresult:
             logger.error(f"receiveResponseXML received an error from QBWC. HRESULT: {hresult}, Message: {message}")
@@ -653,7 +656,7 @@ class QBWCService(ServiceBase):
                 logger.warning(f"Received empty response for task: {active_task}. This may be normal if the query returned no data.")
                 session_data["current_task_index"] += 1
                 logger.info(f"Incremented current_task_index to {session_data['current_task_index']} after empty response.")
-                progress = 100
+                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                 save_qbwc_session_state()
                 return str(progress)
 
@@ -721,18 +724,18 @@ class QBWCService(ServiceBase):
                                 logger.info("Customer iteration complete or no iterator.")
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"CustomerQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             session_data["last_error"] = f"CustomerQuery Error: {status_message}"
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100 
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find CustomerQueryRs in the response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == VENDOR_QUERY:
                     vendor_query_rs = root.find('.//VendorQueryRs')
@@ -797,18 +800,18 @@ class QBWCService(ServiceBase):
                                 logger.info("Vendor iteration complete or no iterator.")
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1 
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"VendorQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             session_data["last_error"] = f"VendorQuery Error: {status_message}"
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1 
-                            progress = 100 
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find VendorQueryRs in the response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == INVOICE_QUERY:
                     invoice_query_rs = root.find('.//InvoiceQueryRs')
@@ -907,18 +910,18 @@ class QBWCService(ServiceBase):
                                 logger.info("Invoice iteration complete or no iterator.")
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find InvoiceQueryRs in the response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                 elif entity == BILL_QUERY:
                     bill_query_rs = root.find('.//BillQueryRs')
                     if bill_query_rs is not None:
@@ -1005,17 +1008,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"BillQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find BillQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == RECEIVEPAYMENT_QUERY:
                     payment_query_rs = root.find('.//ReceivePaymentQueryRs')
@@ -1084,17 +1087,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"ReceivePaymentQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find ReceivePaymentQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == CREDITMEMO_QUERY:
                     credit_memo_query_rs = root.find('.//CreditMemoQueryRs')
@@ -1135,17 +1138,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"CreditMemoQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find CreditMemoQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                 
                 elif entity == SALESORDER_QUERY:
                     sales_order_query_rs = root.find('.//SalesOrderQueryRs')
@@ -1186,17 +1189,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"SalesOrderQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find SalesOrderQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == PURCHASEORDER_QUERY:
                     purchase_order_query_rs = root.find('.//PurchaseOrderQueryRs')
@@ -1237,17 +1240,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"PurchaseOrderQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find PurchaseOrderQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
                 elif entity == JOURNALENTRY_QUERY: # New
                     journal_entry_query_rs = root.find('.//JournalEntryQueryRs')
@@ -1288,17 +1291,17 @@ class QBWCService(ServiceBase):
                             else:
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
-                                progress = 100
+                                progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                         else:
                             logger.error(f"JournalEntryQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                            progress = 100
+                            progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
                     else:
                         logger.warning("Could not find JournalEntryQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                        progress = 100
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks) if total_tasks > 0 else 100
 
         except ET.ParseError as e:
             logger.error(f"Error parsing XML response for task {active_task}: {e}. Response snippet: {response[:500] if response else 'Empty'}")
