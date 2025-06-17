@@ -138,14 +138,14 @@ def _extract_transaction_data(txn_xml: ET.Element, is_sales_txn: bool) -> Dict[s
     # Common transaction fields
     data.update({
         "due_date": _extract_text(txn_xml, 'DueDate'),
-        "amount_due": float(_extract_text(txn_xml, 'AmountDue', '0.0')),
-        "subtotal": float(_extract_text(txn_xml, 'Subtotal', '0.0')),
-        "applied_amount": float(_extract_text(txn_xml, 'AppliedAmount', '0.0')),
-        "balance_remaining": float(_extract_text(txn_xml, 'BalanceRemaining', '0.0')),
+        "amount_due": float(_extract_text(txn_xml, 'AmountDue', '0.0') or '0.0'),
+        "subtotal": float(_extract_text(txn_xml, 'Subtotal', '0.0') or '0.0'),
+        "applied_amount": float(_extract_text(txn_xml, 'AppliedAmount', '0.0') or '0.0'),
+        "balance_remaining": float(_extract_text(txn_xml, 'BalanceRemaining', '0.0') or '0.0'),
     })
     if txn_xml.tag == 'InvoiceRet':
         data['is_paid'] = _extract_text(txn_xml, 'IsPaid') == 'true'
-        data['sales_tax_total'] = float(_extract_text(txn_xml, 'SalesTaxTotal', '0.0'))
+        data['sales_tax_total'] = float(_extract_text(txn_xml, 'SalesTaxTotal', '0.0') or '0.0')
 
     # Item lines (for most transaction types)
     line_item_tag = txn_xml.tag.replace('Ret', 'LineRet')
@@ -153,10 +153,10 @@ def _extract_transaction_data(txn_xml: ET.Element, is_sales_txn: bool) -> Dict[s
         line_data = {
             "item_name": _extract_text(line_xml, 'ItemRef/FullName'),
             "description": _extract_text(line_xml, 'Desc'),
-            "quantity": float(_extract_text(line_xml, 'Quantity', '0.0')),
-            "rate": float(_extract_text(line_xml, 'Rate', '0.0')),
-            "cost": float(_extract_text(line_xml, 'Cost', '0.0')),
-            "amount": float(_extract_text(line_xml, 'Amount', '0.0')),
+            "quantity": float(_extract_text(line_xml, 'Quantity', '0.0') or '0.0'),
+            "rate": float(_extract_text(line_xml, 'Rate', '0.0') or '0.0'),
+            "cost": float(_extract_text(line_xml, 'Cost', '0.0') or '0.0'),
+            "amount": float(_extract_text(line_xml, 'Amount', '0.0') or '0.0'),
         }
         data["item_lines"].append(line_data)
 
@@ -348,6 +348,44 @@ class QBWCService(ServiceBase):
             # NVu: An empty string ticket indicates failure, QBWC will not proceed
             return ["", "nvu"]
 
+    def _build_xml_request(self, current_task, session_data):
+        """Builds the QBXML request for a given task."""
+        request_id = current_task.get("requestID", "1")
+        qbxml_version = session_data.get("qbxml_version", "13.0")
+        entity = current_task["entity"]
+        entity_name = entity.replace('Query', '') # e.g., CustomerQuery -> Customer
+        iterator_id = current_task.get("iteratorID")
+        params = current_task.get("params", {})
+
+        # Base attributes for the query
+        iterator_attrs = f'iterator="Continue" iteratorID="{iterator_id}"' if iterator_id else ''
+        
+        # Specifics for different queries
+        if entity == INVOICE_QUERY:
+            max_returned = 10
+            inner_xml = "<IncludeLineItems>true</IncludeLineItems>"
+        else: # Customers, Vendors
+            max_returned = 20
+            inner_xml = ""
+
+        # Add modified date filter if not iterating and it exists in params
+        if not iterator_id and "ModifiedDateRangeFilter" in params:
+            from_date = params["ModifiedDateRangeFilter"]["FromModifiedDate"]
+            inner_xml += f'<ModifiedDateRangeFilter><FromModifiedDate>{from_date}</FromModifiedDate></ModifiedDateRangeFilter>'
+
+        xml_template = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <{entity_name}Rq requestID="{request_id}" {iterator_attrs}>
+      <MaxReturned>{max_returned}</MaxReturned>
+      {inner_xml}
+    </{entity_name}Rq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+        
+        return xml_template.strip()
+
     @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         """
@@ -431,15 +469,18 @@ class QBWCService(ServiceBase):
                     if entity == CUSTOMER_QUERY:
                         for customer_ret in response_rs.findall('.//CustomerRet'):
                             customer_data = _extract_customer_data_from_ret(customer_ret)
+                            logger.info(f"Processing Customer: {customer_data.get('FullName')}")
                             create_or_update_odoo_partner(customer_data, is_customer=True)
                     elif entity == VENDOR_QUERY:
                         for vendor_ret in response_rs.findall('.//VendorRet'):
                             # NOTE: Using customer extractor for vendor. Create a specific one if needed.
                             vendor_data = _extract_customer_data_from_ret(vendor_ret)
+                            logger.info(f"Processing Vendor: {vendor_data.get('FullName')}")
                             create_or_update_odoo_partner(vendor_data, is_customer=False)
                     elif entity == INVOICE_QUERY:
                         for invoice_ret in response_rs.findall('.//InvoiceRet'):
                             invoice_data = _extract_transaction_data(invoice_ret, is_sales_txn=True)
+                            logger.info(f"Processing Invoice: {invoice_data.get('ref_number')} for {invoice_data.get('partner_name')}")
                             create_or_update_odoo_invoice(invoice_data)
 
                     # Handle iterator for paginated responses
