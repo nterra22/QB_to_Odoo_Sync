@@ -280,12 +280,12 @@ class QBWCService(ServiceBase):
                     "type": QB_QUERY,
                     "entity": JOURNALENTRY_QUERY, 
                     "requestID": "1",
-                    "iteratorID": None,
-                    "params": {
+                    "iteratorID": None,                    "params": {
                         # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true" 
                     }
-                }                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
+                },
+                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
             ]
 
             qbwc_session_state[session_key] = {
@@ -302,8 +302,10 @@ class QBWCService(ServiceBase):
             return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
             logger.warning(f"Authentication failed for user: {strUserName}")
-            return ["", "nvu"]    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
-    def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
+            return ["", "nvu"]
+
+    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
+    def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName,
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         
         logger.debug("Method sendRequestXML called")
@@ -341,7 +343,9 @@ class QBWCService(ServiceBase):
         if current_task["type"] == QB_QUERY:
             entity = current_task["entity"]
             iterator_id = current_task.get("iteratorID")
-            qbxml_version = session_data.get("qbxml_version", "13.0") # Default to 13.0 if not set            # Helper to build TxnDateRangeFilter XML
+            qbxml_version = session_data.get("qbxml_version", "13.0") # Default to 13.0 if not set
+
+            # Helper to build TxnDateRangeFilter XML
             def get_txn_date_filter_xml(params):
                 if "TxnDateRangeFilter" in params:
                     return f'''<TxnDateRangeFilter>
@@ -354,7 +358,6 @@ class QBWCService(ServiceBase):
             def get_include_line_items_xml(params):
                 if "IncludeLineItems" in params:
                     return f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>'''
-                return ""
                 return ""
 
             if entity == CUSTOMER_QUERY:
@@ -402,16 +405,12 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}">
       <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
-      <MaxReturned>100</MaxReturned>
-    </VendorQueryRq>
+      <MaxReturned>100</MaxReturned>    </VendorQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
 
             elif entity == INVOICE_QUERY:
                 params = current_task.get("params", {})
-                # Remove date filter XML generation
-                modified_date_filter_xml = ""
-                txn_date_filter_xml = ""
 
                 include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
                 owner_id_xml = f'''<OwnerID>{params["OwnerID"]}</OwnerID>''' if "OwnerID" in params else ""
@@ -621,10 +620,10 @@ class QBWCService(ServiceBase):
       <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> 
     </JournalEntryQueryRq>
   </QBXMLMsgsRq>
-</QBXML>'''
+</QBXML>'''        # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
+        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync
 
-        # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
-        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}")
+        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}")
         logger.info(f"Generated XML request (first 500 chars): {xml_request[:500] if xml_request else 'EMPTY REQUEST'}")
         return xml_request
 
@@ -659,9 +658,7 @@ class QBWCService(ServiceBase):
                 logger.warning(f"Received empty response for task: {active_task}. This may be normal if the query returned no data.")
                 session_data["current_task_index"] += 1
                 logger.info(f"Incremented current_task_index to {session_data['current_task_index']} after empty response.")
-                progress = 100
-                if progress != 50:  # 50 signals QBWC to re-query this same iterator page
-                    progress = _compute_overall_progress(session_data)
+                progress = _compute_overall_progress(session_data)
                 save_qbwc_session_state()
                 return str(progress)
 
