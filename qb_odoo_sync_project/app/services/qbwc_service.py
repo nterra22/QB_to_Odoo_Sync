@@ -75,6 +75,10 @@ def save_qbwc_session_state():
     except Exception as e:
         logger.error(f"Failed to save QBWC session state: {e}")
 
+# Load the session state from the file when the service module is loaded.
+# This helps persist sessions across server restarts.
+load_qbwc_session_state()
+
 def _get_xml_text(element: Optional[ET.Element], default: Optional[str] = None) -> Optional[str]:
     """Safely get text from an XML element."""
     if element is not None and element.text is not None:
@@ -281,6 +285,7 @@ class QBWCService(ServiceBase):
                 "company_file_name": None, # Will be set by QBWC
                 "qbxml_version": None # Will be set by QBWC
             }
+            save_qbwc_session_state()
             
             return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
@@ -290,7 +295,7 @@ class QBWCService(ServiceBase):
     @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
-        load_qbwc_session_state()
+        
         logger.debug("Method sendRequestXML called")
         logger.info(f"sendRequestXML invoked with ticket: {ticket}") # Added logging
 
@@ -619,7 +624,7 @@ class QBWCService(ServiceBase):
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def receiveResponseXML(self, ticket, response, hresult, message):
-        load_qbwc_session_state()
+        
         logger.debug("Method receiveResponseXML called")
         logger.info(f"QBWC Service: receiveResponseXML called. Ticket: {ticket}")
 
@@ -1356,6 +1361,7 @@ class QBWCService(ServiceBase):
             duration = datetime.now() - session_info.get("created_at", datetime.now())
             logger.info(f"Session {ticket} closed after {duration}")
             del qbwc_session_state[ticket]
+            save_qbwc_session_state()
         else:
             logger.warning(f"closeConnection: Ticket {ticket} not found")
         
