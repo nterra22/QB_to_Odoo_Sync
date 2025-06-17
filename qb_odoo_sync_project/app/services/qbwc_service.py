@@ -290,41 +290,37 @@ class QBWCService(ServiceBase):
             return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
             logger.warning(f"Authentication failed for user: {strUserName}")
-            return ["", "nvu"]
-
-    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
+            return ["", "nvu"]    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         
         logger.debug("Method sendRequestXML called")
-        logger.info(f"sendRequestXML invoked with ticket: {ticket}") # Added logging
+        logger.info(f"sendRequestXML invoked with ticket: {ticket}")
 
         session_data = qbwc_session_state.get(ticket)
-        logger.info(f"sendRequestXML: Retrieved session_data: {session_data}") # Added logging
+        logger.info(f"sendRequestXML: Retrieved session_data exists: {session_data is not None}")
 
         if not session_data:
-            logger.error(f"sendRequestXML: Invalid ticket {ticket}. No session data found.") # Enhanced logging
-            return "" # Return empty string if no valid session
+            logger.error(f"sendRequestXML: Invalid ticket {ticket}. No session data found.")
+            return ""
 
         # Store company file and QBXML version info from QBWC
         session_data["company_file_name"] = strCompanyFileName
         session_data["qbxml_version"] = f"{qbXMLMajorVers}.{qbXMLMinorVers}"
-        logger.info(f"sendRequestXML: CompanyFileName='{strCompanyFileName}', QBXMLVersion='{session_data['qbxml_version']}'") # Added logging
+        logger.info(f"sendRequestXML: CompanyFileName='{strCompanyFileName}', QBXMLVersion='{session_data['qbxml_version']}'")
 
         task_queue = session_data.get("task_queue", [])
         current_task_index = session_data.get("current_task_index", 0)
-        logger.info(f"sendRequestXML: Task Queue (length {len(task_queue)}): {task_queue}") # Added logging
-        logger.info(f"sendRequestXML: Current Task Index: {current_task_index}") # Added logging
+        logger.info(f"sendRequestXML: Task Queue length: {len(task_queue)}")
+        logger.info(f"sendRequestXML: Current Task Index: {current_task_index}")
 
         if current_task_index >= len(task_queue):
-            logger.info("sendRequestXML: All tasks completed for this session or task queue is empty initially.") # Enhanced logging
-            # Optionally, here you could trigger fetching changes from Odoo
-            # and populate the queue with new tasks to send data to QB.
-            # For now, we signal no more requests.
-            return "" # No more requests
+            logger.info("sendRequestXML: All tasks completed for this session or task queue is empty initially.")
+            return ""
 
         current_task = task_queue[current_task_index]
-        session_data["active_task"] = current_task # Store active task for receiveResponseXML
+        logger.info(f"sendRequestXML: Processing task: {current_task}")
+        session_data["active_task"] = current_task
         save_qbwc_session_state()
 
         xml_request = ""
@@ -333,9 +329,7 @@ class QBWCService(ServiceBase):
         if current_task["type"] == QB_QUERY:
             entity = current_task["entity"]
             iterator_id = current_task.get("iteratorID")
-            qbxml_version = session_data.get("qbxml_version", "13.0") # Default to 13.0 if not set
-
-            # Helper to build TxnDateRangeFilter XML
+            qbxml_version = session_data.get("qbxml_version", "13.0") # Default to 13.0 if not set            # Helper to build TxnDateRangeFilter XML
             def get_txn_date_filter_xml(params):
                 if "TxnDateRangeFilter" in params:
                     return f'''<TxnDateRangeFilter>
@@ -348,6 +342,7 @@ class QBWCService(ServiceBase):
             def get_include_line_items_xml(params):
                 if "IncludeLineItems" in params:
                     return f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>'''
+                return ""
                 return ""
 
             if entity == CUSTOMER_QUERY:
@@ -617,9 +612,8 @@ class QBWCService(ServiceBase):
 </QBXML>'''
 
         # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
-        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync
-
-        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}: {xml_request}")
+        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}")
+        logger.info(f"Generated XML request (first 500 chars): {xml_request[:500] if xml_request else 'EMPTY REQUEST'}")
         return xml_request
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
@@ -1317,13 +1311,13 @@ class QBWCService(ServiceBase):
                 active_task["iteratorID"] = None
             session_data["current_task_index"] += 1
             save_qbwc_session_state()
-            return "0"
-            
+            return "0"            
         if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
             logger.info("All tasks in the current queue are processed.")
             progress = 100
         
         save_qbwc_session_state()
+        logger.info(f"receiveResponseXML: Task index now: {session_data['current_task_index']}, Total tasks: {len(session_data.get('task_queue', []))}")
         logger.info(f"receiveResponseXML returning progress: {progress}% for task: {active_task.get('entity', 'N/A')}")
         return str(progress)
 
