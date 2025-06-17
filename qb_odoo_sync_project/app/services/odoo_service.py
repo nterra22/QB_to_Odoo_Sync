@@ -8,12 +8,12 @@ Handles all interactions with the Odoo ERP system including:
 - Journal entry creation
 """
 import xmlrpc.client # Added import
-import requests # Keep for potential future use or other integrations
+# import requests # Keep for potential future use or other integrations
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ..logging_config import logger
 # Ensure this path is correct based on your project structure
-from ..utils.data_loader import load_json_data, get_field_mapping_for_entity 
+from ..utils.data_loader import get_field_mapping # Corrected import
 
 # --- Odoo Connection Configuration ---
 ODOO_URL = "https://nterra22-sounddecision-odoo-develop-20178686.dev.odoo.com"
@@ -24,7 +24,18 @@ ODOO_REQUEST_TIMEOUT = 60  # Increased timeout
 # --- End Odoo Connection Configuration ---
 
 _cached_uid = None
-FIELD_MAPPING = None # Added: Initialize FIELD_MAPPING
+FIELD_MAPPING = None 
+
+def _load_mappings(): 
+    global FIELD_MAPPING
+    FIELD_MAPPING = get_field_mapping() # Use the new getter
+    if not FIELD_MAPPING:
+        logger.error("Field mapping could not be loaded. Service may not function correctly.")
+    else:
+        logger.info(f"Field mapping loaded successfully in odoo_service: {list(FIELD_MAPPING.keys()) if isinstance(FIELD_MAPPING, dict) else 'Not a dict'}")
+
+
+_load_mappings() # Load mappings when the module is imported
 
 def _get_odoo_uid() -> Optional[int]:
     """Authenticates with Odoo and returns the UID."""
@@ -94,9 +105,6 @@ def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict:
         if "AccessDenied" in e.faultString or "Session expired" in e.faultString or "Invalid user credentials" in e.faultString:
              _cached_uid = None
              logger.info("Cleared cached Odoo UID due to potential session/access issue.")
-        return None
-    except requests.exceptions.RequestException as e: 
-        logger.error(f"Network request exception during Odoo RPC call for {model}.{method}: {e}")
         return None
     except Exception as e: 
         logger.error(f"Unexpected error during Odoo RPC call for {model}.{method}: {e}", exc_info=True)
@@ -191,6 +199,359 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     
     return new_partner_id
 
+# --- START OF REORGANIZED AND FIXED PARTNER AND PRODUCT LOGIC ---
+def get_odoo_country_id(country_identifier: str) -> Optional[int]:
+    """
+    Finds an Odoo country ID by its name or code.
+    Args:
+        country_identifier: Country name (e.g., "United States") or code (e.g., "US").
+    Returns:
+        Odoo country ID or None.
+    """
+    if not country_identifier:
+        return None
+    
+    # Search by code first (more reliable)
+    countries_by_code = _odoo_rpc_call(
+        "res.country", "search_read",
+        args_list=[[("code", "=", country_identifier.upper())]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    if countries_by_code:
+        return countries_by_code[0]["id"]
+
+    # Search by name if code search fails
+    countries_by_name = _odoo_rpc_call(
+        "res.country", "search_read",
+        args_list=[[("name", "ilike", country_identifier)]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    if countries_by_name:
+        return countries_by_name[0]["id"]
+    
+    logger.warning(f"Odoo country not found for identifier: {country_identifier}")
+    return None
+
+def get_odoo_state_id(state_identifier: str, country_code: Optional[str] = None) -> Optional[int]:
+    """
+    Finds an Odoo state ID by its name or code, optionally filtered by country.
+    Args:
+        state_identifier: State name (e.g., "California") or code (e.g., "CA").
+        country_code: Optional Odoo country code (e.g., "US") to narrow down search.
+    Returns:
+        Odoo state ID or None.
+    """
+    if not state_identifier:
+        return None
+
+    domain = []
+    # Try to match by code first
+    if len(state_identifier) <= 3: # Heuristic: short identifiers are likely codes
+         domain.append(("code", "=", state_identifier.upper()))
+    else: # Longer identifiers are likely names
+        domain.append(("name", "ilike", state_identifier))
+
+    if country_code:
+        country_id = get_odoo_country_id(country_code)
+        if country_id:
+            domain.append(("country_id", "=", country_id))
+        else:
+            logger.warning(f"Cannot filter state by country code '{country_code}' as country was not found.")
+
+    states = _odoo_rpc_call(
+        "res.country.state", "search_read",
+        args_list=[domain],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    if states:
+        return states[0]["id"]
+    
+    # If initial search failed and we had a country filter, try without it as a fallback
+    if country_code and not states:
+        logger.info(f"State '{state_identifier}' not found with country filter '{country_code}'. Retrying without country filter.")
+        domain_no_country = [item for item in domain if item[0] != "country_id"]
+        states_no_country = _odoo_rpc_call(
+            "res.country.state", "search_read",
+            args_list=[domain_no_country],
+            kwargs_dict={"fields": ["id"], "limit": 1}
+        )
+        if states_no_country:
+            return states_no_country[0]["id"]
+
+    logger.warning(f"Odoo state not found for identifier: {state_identifier} (Country: {country_code or 'any'})")
+    return None
+
+def get_odoo_partner_category_ids(category_names: List[str]) -> List[int]:
+    """Finds Odoo partner category IDs (tags) by their names."""
+    if not category_names:
+        return []
+    
+    sanitized_names = [name.strip() for name in category_names if name and name.strip()]
+    if not sanitized_names:
+        return []
+
+    domain = [('name', 'in', sanitized_names)]
+    categories = _odoo_rpc_call(
+        "res.partner.category", "search_read",
+        args_list=[domain],
+        kwargs_dict={"fields": ["id", "name"]}
+    )
+    
+    found_ids = []
+    if categories:
+        found_names_map = {cat['name']: cat['id'] for cat in categories}
+        for name in sanitized_names:
+            if name in found_names_map:
+                found_ids.append(found_names_map[name])
+            else:
+                logger.warning(f"Odoo partner category (tag) not found for name: '{name}'. It will not be assigned. Consider creating it in Odoo.")
+    else: # No categories found at all for the given names
+        for name in sanitized_names:
+            logger.warning(f"Odoo partner category (tag) not found for name: '{name}'. It will not be assigned.")
+            
+    return found_ids
+
+def get_odoo_payment_term_id(payment_term_name: str) -> Optional[int]:
+    """Finds an Odoo payment term ID by its name."""
+    if not payment_term_name or not payment_term_name.strip():
+        logger.debug("Empty payment term name provided.")
+        return None
+    
+    name_to_search = payment_term_name.strip()
+    
+    terms = _odoo_rpc_call(
+        "account.payment.term", "search_read",
+        args_list=[[("name", "=", name_to_search)]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    if terms:
+        return terms[0]["id"]
+    else:
+        # Fallback: try case-insensitive search if exact match fails
+        terms_ilike = _odoo_rpc_call(
+            "account.payment.term", "search_read",
+            args_list=[[("name", "ilike", name_to_search)]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
+        )
+        if terms_ilike:
+            logger.info(f"Found payment term using 'ilike' for '{name_to_search}'. ID: {terms_ilike[0]['id']}")
+            return terms_ilike[0]["id"]
+        
+        logger.warning(f"Odoo payment term not found for name: '{name_to_search}'.")
+        return None
+
+def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any]) -> Optional[int]:
+    """
+    Creates or updates a partner in Odoo from QuickBooks customer data.
+    Uses field_mapping.json for mapping QB fields to Odoo fields.
+    Handles creation of new partners and updates to existing ones based on QB ListID (ref in Odoo).
+    """
+    logger.info(f"Processing QB Customer/Partner: {qb_customer_data.get('Name', 'N/A')}, ListID: {qb_customer_data.get('ListID', 'N/A')}")
+    # logger.debug(f"Full QB Customer data: {qb_customer_data}") # Uncomment for detailed debugging
+
+    if not FIELD_MAPPING:
+        logger.error("Field mapping not loaded. Cannot process partner.")
+        return None
+
+    customer_mapping_config = FIELD_MAPPING.get("entities", {}).get("Customers")
+    if not customer_mapping_config:
+        logger.error("Customer mapping configuration not found in field_mapping.json.")
+        return None
+
+    qb_list_id = qb_customer_data.get("ListID")
+    if not qb_list_id:
+        logger.error("QuickBooks ListID missing from customer data. Cannot reliably find or create partner.")
+        return None
+
+    odoo_partner_id = None
+    existing_partner_data = find_partner_by_ref(qb_list_id)
+
+    if existing_partner_data:
+        odoo_partner_id = existing_partner_data["id"]
+        logger.info(f"Found existing Odoo partner ID: {odoo_partner_id} for QB ListID: {qb_list_id}")
+    else:
+        logger.info(f"No existing Odoo partner found for QB ListID: {qb_list_id}. Will attempt to create.")
+
+    odoo_payload = {}
+    
+    # 1. Handle Name and Company Type (is_company, type)
+    raw_name = qb_customer_data.get("Name")
+    if not raw_name or not raw_name.strip():
+        logger.error(f"QB Customer data for ListID {qb_list_id} is missing 'Name' or 'Name' is empty. Cannot process partner.")
+        return None
+    
+    # Determine initial is_company status
+    is_company = True # Default
+    if "IsPerson" in qb_customer_data:
+        is_company = not qb_customer_data["IsPerson"]
+
+    if ',' in raw_name:
+        parts = [p.strip() for p in raw_name.split(',', 1)]
+        if len(parts) == 2:
+            last_name, first_name = parts
+            odoo_payload["name"] = f"{first_name} {last_name}"
+            # If name is "LastName, FirstName", it's usually an individual.
+            # Override is_company only if IsPerson is not present or contradicts.
+            if "IsPerson" not in qb_customer_data: # If IsPerson was not provided, assume individual
+                 is_company = False
+            # If IsPerson was provided, its value for is_company is already set.
+        else: # Malformed "LastName, FirstName"
+            odoo_payload["name"] = raw_name
+            # is_company remains as determined by IsPerson or default
+    else: # CompanyName or "FirstName LastName"
+        odoo_payload["name"] = raw_name
+        # is_company remains as determined by IsPerson or default
+
+    # If ParentRef_ListID exists, this is a contact (child), so it's not a company itself. This overrides previous.
+    if qb_customer_data.get("ParentRef_ListID"):
+        is_company = False
+    
+    odoo_payload["is_company"] = is_company
+    if not is_company:
+        odoo_payload["type"] = "contact"
+
+    # 2. Iterate through mapped fields from field_mapping.json
+    for mapping_rule in customer_mapping_config.get("fields", []):
+        qb_field = mapping_rule["qbd_field"]
+        odoo_field = mapping_rule["odoo_field"]
+        
+        # Skip fields handled manually or invalid for direct mapping
+        if odoo_field in ["external_id", "first_name", "last_name", "name"]: # 'name' is already set
+            continue 
+        
+        if qb_field not in qb_customer_data:
+            continue # Skip if QB data doesn't have this field
+            
+        qb_value = qb_customer_data[qb_field]
+        
+        # Skip if QB value is None or an empty string after stripping
+        if qb_value is None or (isinstance(qb_value, str) and not qb_value.strip()):
+            logger.debug(f"Skipping QB field '{qb_field}' for Odoo field '{odoo_field}' due to empty/None value.")
+            continue
+
+        # Skip complex relational fields that require creating other records (e.g., child_ids.street for shipping addresses)
+        if "." in odoo_field: 
+            logger.warning(f"Skipping complex field mapping for '{odoo_field}' from QB field '{qb_field}'. Value: '{qb_value}'. This may require specific logic for related models (e.g., child contacts).")
+            continue
+
+        # Special handling for relational fields requiring ID lookups
+        if odoo_field == "parent_id": # qb_field is typically "ParentRef_ListID"
+            parent_list_id = str(qb_value) 
+            if parent_list_id:
+                parent_partner_data = find_partner_by_ref(parent_list_id)
+                if parent_partner_data:
+                    odoo_payload[odoo_field] = parent_partner_data["id"]
+                else:
+                    logger.warning(f"Parent partner with QB ListID {parent_list_id} not found in Odoo for child {odoo_payload.get('name')}. Cannot set parent_id.")
+            continue 
+
+        elif odoo_field == "country_id": # qb_field is typically "BillAddress_Country"
+            country_odoo_id = get_odoo_country_id(str(qb_value))
+            if country_odoo_id: 
+                odoo_payload[odoo_field] = country_odoo_id
+            else:
+                logger.warning(f"Country '{qb_value}' not found in Odoo. Skipping country_id for partner {odoo_payload.get('name')}.")
+            continue
+
+        elif odoo_field == "state_id": # qb_field is typically "BillAddress_State"
+            country_code_for_state = None
+            # Try to get country code from already resolved country_id in payload (if BillAddress_Country was mapped to country_id)
+            if "country_id" in odoo_payload and isinstance(odoo_payload["country_id"], int):
+                country_data = _odoo_rpc_call("res.country", "read", args_list=[[odoo_payload["country_id"]]], kwargs_dict={"fields": ["code"]})
+                if country_data and isinstance(country_data, list) and country_data[0].get("code"):
+                     country_code_for_state = country_data[0].get("code")
+            # Fallback: try to get country from QB data if BillAddress_Country is available and current field is BillAddress_State
+            elif qb_field == "BillAddress_State" and "BillAddress_Country" in qb_customer_data:
+                 country_code_for_state = str(qb_customer_data["BillAddress_Country"])
+            
+            state_odoo_id = get_odoo_state_id(str(qb_value), country_code_for_state)
+            if state_odoo_id: 
+                odoo_payload[odoo_field] = state_odoo_id
+            else:
+                logger.warning(f"State '{qb_value}' (Country: {country_code_for_state or 'any'}) not found in Odoo. Skipping state_id for partner {odoo_payload.get('name')}.")
+            continue
+            
+        elif odoo_field == "category_id": # qb_field is "CustomerTypeRef_FullName"
+            # Odoo's category_id on res.partner is a Many2many field for tags (res.partner.category)
+            category_name = str(qb_value)
+            if category_name:
+                category_ids = get_odoo_partner_category_ids([category_name]) # QB usually provides one type here
+                if category_ids:
+                    # For M2M, use Odoo's special command (6, 0, [IDs]) to replace existing tags
+                    odoo_payload[odoo_field] = [(6, 0, category_ids)] 
+            continue
+
+        elif odoo_field == "property_payment_term_id": # qb_field is "TermsRef_FullName"
+            payment_term_name = str(qb_value)
+            if payment_term_name:
+                payment_term_id = get_odoo_payment_term_id(payment_term_name)
+                if payment_term_id:
+                    odoo_payload[odoo_field] = payment_term_id
+            continue
+        
+        # Default: Add to payload if not specially handled
+        odoo_payload[odoo_field] = qb_value
+
+    # 3. Set 'active' status (if mapped qbd_field "IsActive" to odoo_field "active", it's handled by loop)
+    if "active" not in odoo_payload: # If not mapped via loop
+        if "IsActive" in qb_customer_data:
+            odoo_payload["active"] = qb_customer_data["IsActive"]
+        else:
+            odoo_payload["active"] = True # Default to active if not specified
+
+    # 4. Set customer/supplier ranks
+    customer_defaults = customer_mapping_config.get("default_values", {})
+    if "customer_rank" not in odoo_payload: # Only if not set by a direct mapping
+        odoo_payload["customer_rank"] = customer_defaults.get("customer_rank", 1)
+
+    # 5. Ensure 'ref' is set for linking with QB ListID
+    odoo_payload["ref"] = qb_list_id
+    
+    logger.debug(f"Final Odoo partner payload for '{odoo_payload.get('name')}' (ListID: {qb_list_id}): {odoo_payload}")
+
+    # 6. Perform Odoo RPC Call (Create or Update)
+    if odoo_partner_id: # Update existing partner
+        # Odoo's 'write' method takes a list of IDs and a dict of values.
+        # 'ref' can be included; Odoo handles it.
+        if not odoo_payload: 
+            logger.info(f"No changes to update for partner {odoo_payload.get('name')} (ID: {odoo_partner_id}).")
+            return odoo_partner_id
+
+        logger.info(f"Attempting to update Odoo partner ID: {odoo_partner_id} with data: {odoo_payload}")
+        success = _odoo_rpc_call("res.partner", "write", args_list=[[odoo_partner_id], odoo_payload])
+        
+        if success: # Odoo's write usually returns True on success
+            logger.info(f"Successfully updated Odoo partner ID: {odoo_partner_id}")
+            return odoo_partner_id
+        else:
+            logger.error(f"Failed to update Odoo partner ID: {odoo_partner_id}. Payload: {odoo_payload}")
+            return None 
+    else: # Create new partner
+        # Optional: Check for duplicates by name/parent before creating if ListID is new
+        search_domain_dup = [('name', '=', odoo_payload.get('name'))]
+        if odoo_payload.get('parent_id'):
+            search_domain_dup.append(('parent_id', '=', odoo_payload.get('parent_id')))
+        
+        if odoo_payload.get('name'): # Only search if name is present
+            existing_by_name_no_ref = _odoo_rpc_call("res.partner", "search", args_list=[search_domain_dup], kwargs_dict={'limit': 1})
+            if existing_by_name_no_ref:
+                logger.warning(
+                    f"A partner with name '{odoo_payload.get('name')}' "
+                    f"{('and parent ID ' + str(odoo_payload.get('parent_id'))) if odoo_payload.get('parent_id') else ''} "
+                    f"already exists in Odoo with ID {existing_by_name_no_ref[0]} but has no matching QB ListID '{qb_list_id}'. "
+                    f"Review for potential duplicates. Proceeding with creation for ListID: {qb_list_id}."
+                )
+
+        logger.info(f"Attempting to create new Odoo partner with data: {odoo_payload}")
+        new_partner_id_result = _odoo_rpc_call("res.partner", "create", args_list=[odoo_payload]) 
+        
+        if new_partner_id_result and isinstance(new_partner_id_result, int):
+            logger.info(f"Successfully created new Odoo partner with ID: {new_partner_id_result} for QB ListID: {qb_list_id}")
+            return new_partner_id_result
+        else:
+            logger.error(f"Failed to create new Odoo partner for QB ListID: {qb_list_id}, Name: {odoo_payload.get('name')}. Payload: {odoo_payload}. Result: {new_partner_id_result}")
+            return None
+
 def ensure_product_exists(model_code: str, description: str, 
                           sales_price: Optional[float] = None, 
                           purchase_cost: Optional[float] = None,
@@ -198,16 +559,6 @@ def ensure_product_exists(model_code: str, description: str,
     """
     Ensure a product exists in Odoo, creating or updating if necessary.
     Sales price and purchase cost from QB are considered source of truth.
-    
-    Args:
-        model_code: Product internal reference/SKU (from QB Item Name/FullName)
-        description: Product description/name
-        sales_price: Optional sales price from QB
-        purchase_cost: Optional purchase cost from QB
-        odoo_product_type: Optional Odoo product type ('product', 'service', 'consu')
-        
-    Returns:
-        Product ID (product.product) or None on error
     """
     if not model_code or not model_code.strip():
         logger.warning("Empty product model code provided")
@@ -216,91 +567,68 @@ def ensure_product_exists(model_code: str, description: str,
     model_code = model_code.strip()
     description = description.strip() if description else model_code
     
-    # Search for existing product by default_code (SKU)
-    # We need product.template ID for some fields, and product.product ID for transactions.
-    # Odoo typically creates a product.product for each product.template automatically unless variants are used.
-    # For simplicity, we'll manage product.product and let Odoo handle the template.
-    # Fields like list_price and standard_price can often be on product.template.
-    
     products = _odoo_rpc_call(
         "product.product",
         "search_read", 
-        args_list=[["default_code", "=", model_code]],
-        # Fetch fields from product.product and its related product.template
+        args_list=[[("default_code", "=", model_code)]],
         kwargs_dict={"fields": ["id", "product_tmpl_id", "lst_price", "standard_price", "type"], "limit": 1}
     )
 
-    product_id_to_update = None
-    template_id_to_update = None
-    update_values_product = {}
-    update_values_template = {}
+    template_id_to_update = None 
+    update_values_template = {} 
 
     if products:
         product_record = products[0]
         product_id = product_record["id"]
-        template_id = product_record["product_tmpl_id"][0] if product_record.get("product_tmpl_id") else None # product_tmpl_id is a list [id, name]
+        template_id_tuple = product_record.get("product_tmpl_id")
+        template_id_to_update = template_id_tuple[0] if template_id_tuple else None
         
-        logger.info(f"Product '{model_code}' found with ID: {product_id} (Template ID: {template_id})")
-        product_id_to_update = product_id
-        template_id_to_update = template_id # We'll update the template for prices/type
+        logger.info(f"Product '{model_code}' found with ID: {product_id} (Template ID: {template_id_to_update})")
 
-        # Check and update sales price (lst_price on product.template)
-        if sales_price is not None:
-            # Need to read template's current lst_price if not directly on product.product
-            current_template_data = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["lst_price", "type"]})
-            current_sales_price = current_template_data[0]['lst_price'] if current_template_data and current_template_data[0] else None
-            if sales_price != current_sales_price:
-                logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) sales price from {current_sales_price} to {sales_price}")
-                update_values_template["lst_price"] = sales_price
-        
-        # Check and update purchase cost (standard_price on product.template or product.product)
-        # standard_price is often on product.template but can be on product.product for variants.
-        # For non-variant setups, it's usually on the template.
-        if purchase_cost is not None:
-            current_cost_price = product_record.get('standard_price') # product.product might have it
-            if template_id_to_update and current_cost_price is None: # Fallback to template if not on product
-                 current_template_data_cost = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["standard_price"]})
-                 current_cost_price = current_template_data_cost[0]['standard_price'] if current_template_data_cost and current_template_data_cost[0] else None
+        if template_id_to_update: 
+            if sales_price is not None:
+                current_template_data = _odoo_rpc_call("product.template", "read", args_list=[[template_id_to_update]], kwargs_dict={"fields": ["lst_price"]})
+                current_sales_price = current_template_data[0]['lst_price'] if current_template_data and current_template_data[0] else None
+                if sales_price != current_sales_price:
+                    logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) sales price from {current_sales_price} to {sales_price}")
+                    update_values_template["lst_price"] = sales_price
+            
+            if purchase_cost is not None:
+                current_template_data_cost = _odoo_rpc_call("product.template", "read", args_list=[[template_id_to_update]], kwargs_dict={"fields": ["standard_price"]})
+                current_cost_price = current_template_data_cost[0]['standard_price'] if current_template_data_cost and current_template_data_cost[0] else None
+                if purchase_cost != current_cost_price:
+                    logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) cost price from {current_cost_price} to {purchase_cost}")
+                    update_values_template["standard_price"] = purchase_cost
+            
+            if odoo_product_type:
+                current_template_data_type = _odoo_rpc_call("product.template", "read", args_list=[[template_id_to_update]], kwargs_dict={"fields": ["type"]})
+                current_type = current_template_data_type[0]['type'] if current_template_data_type and current_template_data_type[0] else None
+                if odoo_product_type != current_type:
+                    logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) type from {current_type} to {odoo_product_type}")
+                    update_values_template["type"] = odoo_product_type
+            
+            if update_values_template:
+                _odoo_rpc_call("product.template", "write", args_list=[[template_id_to_update], update_values_template])
+                logger.info(f"Updated product.template {template_id_to_update} for '{model_code}'.")
+        else:
+            logger.warning(f"Product '{model_code}' (ID: {product_id}) found but has no associated product.template. Cannot update price/cost/type. Check data integrity in Odoo.")
 
-            if purchase_cost != current_cost_price:
-                logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) cost price from {current_cost_price} to {purchase_cost}")
-                # standard_price is critical, usually set on template for non-variant products
-                update_values_template["standard_price"] = purchase_cost
-        
-        # Check and update product type (on product.template)
-        if odoo_product_type:
-            current_template_data_type = _odoo_rpc_call("product.template", "read", args_list=[template_id_to_update], kwargs_dict={"fields": ["type"]})
-            current_type = current_template_data_type[0]['type'] if current_template_data_type and current_template_data_type[0] else None
-            if odoo_product_type != current_type:
-                logger.info(f"Updating Odoo product '{model_code}' (Template ID: {template_id_to_update}) type from {current_type} to {odoo_product_type}")
-                update_values_template["type"] = odoo_product_type
-
-        if update_values_template and template_id_to_update:
-            _odoo_rpc_call("product.template", "write", args_list=[[template_id_to_update], update_values_template])
-            logger.info(f"Updated product.template {template_id_to_update} for '{model_code}'.")
-        # No product.product specific fields to update in this logic yet, but structure is there.
-
-        return product_id # Return existing product.product ID
+        return product_id
     
-    # Create new product if not found
     logger.info(f"Product '{model_code}' not found. Creating...")
     
-    # Data for product.template
     product_template_data = {
         "name": description,
         "default_code": model_code,
-        "type": odoo_product_type if odoo_product_type else "product",  # Default to 'product' (storable)
+        "type": odoo_product_type if odoo_product_type else "product",
         "purchase_ok": True,
         "sale_ok": True,
-        # "invoice_policy": "order", # Common default
-        # "purchase_method": "purchase", # Common default
     }
     if sales_price is not None:
         product_template_data["lst_price"] = sales_price
     if purchase_cost is not None:
         product_template_data["standard_price"] = purchase_cost
 
-    # Create the product.template first
     new_template_id = _odoo_rpc_call("product.template", "create", args_list=[product_template_data])
     
     if not new_template_id:
@@ -309,12 +637,10 @@ def ensure_product_exists(model_code: str, description: str,
     
     logger.info(f"Product template for '{model_code}' created with ID: {new_template_id}")
 
-    # Odoo automatically creates a product.product when a product.template is made (unless variants involved)
-    # We need to find that product.product to return its ID.
     created_products = _odoo_rpc_call(
         "product.product",
         "search_read",
-        args_list=[["product_tmpl_id", "=", new_template_id], ["default_code", "=", model_code]],
+        args_list=[[("product_tmpl_id", "=", new_template_id), ("default_code", "=", model_code)]], 
         kwargs_dict={"fields": ["id"], "limit": 1}
     )
 
@@ -323,12 +649,20 @@ def ensure_product_exists(model_code: str, description: str,
         logger.info(f"Product '{model_code}' (product.product) created with ID: {new_product_id} linked to template {new_template_id}")
         return new_product_id
     else:
-        # This case should be rare if Odoo is functioning normally.
-        # Could happen if there's a delay or an issue with automated product.product creation.
-        logger.error(f"Failed to find the auto-created product.product for template ID {new_template_id} and code '{model_code}'. Manual check in Odoo might be needed.")
-        # As a fallback, we could try creating product.product directly, but it's better to rely on Odoo's standard behavior.
-        # For now, return None as the specific product.product variant wasn't confirmed.
-        return None
+        logger.error(f"Failed to find the auto-created product.product for template ID {new_template_id} and code '{model_code}'. This can happen with variants or if creation is delayed. Manual check in Odoo might be needed.")
+        fallback_products = _odoo_rpc_call(
+            "product.product", "search_read",
+            args_list=[[("product_tmpl_id", "=", new_template_id)]],
+            kwargs_dict={"fields": ["id"], "limit": 1}
+        )
+        if fallback_products:
+            new_product_id = fallback_products[0]["id"]
+            logger.info(f"Product '{model_code}' (product.product) created with ID: {new_product_id} (found via fallback search) linked to template {new_template_id}")
+            return new_product_id
+        else:
+            logger.error(f"Fallback search also failed to find product.product for template ID {new_template_id}.")
+            return None
+# --- END OF REORGANIZED AND FIXED PARTNER AND PRODUCT LOGIC ---
 
 # --- Account Crosswalk Helper ---
 _account_crosswalk_data = None
@@ -336,49 +670,67 @@ _account_crosswalk_data = None
 def load_account_crosswalk():
     global _account_crosswalk_data
     if _account_crosswalk_data is None: # Load only once
-        _account_crosswalk_data = load_json_data("account_crosswalk.json")
-        if _account_crosswalk_data is None: 
-            logger.error("Account crosswalk data (account_crosswalk.json) could not be loaded or is empty.")
-            _account_crosswalk_data = [] 
-        elif not isinstance(_account_crosswalk_data, list):
-             logger.error(f"Account crosswalk data is not in the expected list format. Loaded: {_account_crosswalk_data}")
-             _account_crosswalk_data = [] 
-        else:
-            logger.info("Account crosswalk data loaded successfully.")
+        # _account_crosswalk_data = load_json_data("account_crosswalk.json") # This was the error source
+        # Corrected: Use the loader from app.utils.data_loader
+        from ..utils.data_loader import load_account_crosswalk as util_load_account_crosswalk
+        util_load_account_crosswalk() # This will populate the _account_crosswalk_data in data_loader
+        
+        # Now, get the loaded data from data_loader's cache
+        from ..utils.data_loader import get_account_map as util_get_account_map # Need a way to get all data or use its functions
+        # This is a bit tricky as data_loader caches internally.
+        # For now, we'll rely on data_loader's internal cache and use its get_account_map.
+        # If we need the whole dict here, data_loader needs a function to return it.
+        # For now, this function will just ensure it's loaded in data_loader.
+        logger.info("Ensured account crosswalk data is loaded via data_loader.")
+
 
 def get_account_map(qb_account_full_name: str) -> Optional[Dict[str, Any]]:
-    global _account_crosswalk_data
-    if _account_crosswalk_data is None:
-        load_account_crosswalk()
+    # global _account_crosswalk_data # Not needed if using data_loader's functions
+    # if _account_crosswalk_data is None:
+    #     load_account_crosswalk() # Ensures it's loaded in data_loader
 
-    if not isinstance(_account_crosswalk_data, list):
-        logger.error("Account crosswalk data is not a list, cannot search.")
-        return None
+    # Use the getter from data_loader directly
+    from ..utils.data_loader import get_account_map as util_get_account_map
+    return util_get_account_map(qb_account_full_name)
 
-    for mapping in _account_crosswalk_data:
-        if isinstance(mapping, dict) and mapping.get("qb_account_full_name") == qb_account_full_name:
-            return {
-                "code": mapping.get("odoo_code"),
-                "name": mapping.get("odoo_name"),
-                "type": mapping.get("odoo_type"), 
-                "reconcile": mapping.get("odoo_reconcile", False)
-            }
-    return None
+    # if not isinstance(_account_crosswalk_data, list):
+    #     logger.error("Account crosswalk data is not a list, cannot search.")
+    #     return None
 
-load_account_crosswalk()
+    # for mapping in _account_crosswalk_data:
+    #     if isinstance(mapping, dict) and mapping.get("qb_account_full_name") == qb_account_full_name:
+    #         return {
+    #             "code": mapping.get("odoo_code"),
+    #             "name": mapping.get("odoo_name"),
+    #             "type": mapping.get("odoo_type"), 
+    #             "reconcile": mapping.get("odoo_reconcile", False)
+    #         }
+    # return None
+
+load_account_crosswalk() # Call this to ensure data_loader loads it on module import
 
 # --- Field Mapping Loader ---
-def load_field_mapping():
-    global FIELD_MAPPING
-    if FIELD_MAPPING is None:
-        FIELD_MAPPING = load_json_data("field_mapping.json")
-        if FIELD_MAPPING is None:
-            logger.error("Field mapping data (field_mapping.json) could not be loaded or is empty.")
-            FIELD_MAPPING = {} # Initialize as empty dict if loading fails
-        else:
-            logger.info("Field mapping data loaded successfully.")
+# FIELD_MAPPING is already loaded by _load_mappings() at the top of the file.
+# The load_field_mapping function here can be removed if _load_mappings handles it.
 
-load_field_mapping() # Added: Load field mapping at startup
+# def load_field_mapping():
+#     global FIELD_MAPPING
+#     if FIELD_MAPPING is None:
+#         # FIELD_MAPPING = load_json_data("field_mapping.json") # This was the error source
+#         # Corrected: Use the loader from app.utils.data_loader
+#         from ..utils.data_loader import load_field_mapping as util_load_field_mapping
+#         util_load_field_mapping() # This populates _field_mapping_data in data_loader
+        
+#         from ..utils.data_loader import get_field_mapping as util_get_field_mapping
+#         FIELD_MAPPING = util_get_field_mapping() # Get the loaded data
+
+#         if FIELD_MAPPING is None:
+#             logger.error("Field mapping data (field_mapping.json) could not be loaded or is empty.")
+#             FIELD_MAPPING = {} # Initialize as empty dict if loading fails
+#         else:
+#             logger.info("Field mapping data loaded successfully.")
+
+# load_field_mapping() # This is redundant if _load_mappings() at the top works.
 # --- End Account Crosswalk Helper ---
 
 
@@ -590,12 +942,12 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         journals = _odoo_rpc_call(
             "account.journal",
             "search_read",
-            args_list=[["type", "=", "sale"]],
-            kwargs_dict={"fields": ["id"], "limit": 1}
+            args_list=[[('type', '=', 'sale')]],
+            kwargs_dict={"fields": ["id", "name"], "limit": 1} # Added name to log which journal is used
         )
         if journals:
             sales_journal_id = journals[0]["id"]
-            logger.info(f"Found sales journal '{journals[0]['name'] if journals[0].get('name') else 'ID: '+str(sales_journal_id)}' to use.")
+            logger.info(f"Found sales journal '{journals[0].get('name', 'ID: '+str(sales_journal_id))}' to use.") # Log the name
         else:
             logger.error(f"Sales journal '{default_journal_name}' not found in Odoo, and no other sales journal available. Cannot create invoice.")
             return None
@@ -694,6 +1046,9 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
                     datetime.strptime(value, "%Y-%m-%d") 
                 except ValueError:
                     logger.warning(f"Date field {qbd_field_name} ('{value}') is not in YYYY-MM-DD format. Odoo might reject.")
+                # Add a pass statement here if no other action is needed in the try block after strptime
+                # or if the intention was just to validate. If strptime fails, the except block handles it.
+                pass 
             
             # Handle special cases like TermsRef_ListID mapping to invoice_payment_term_id
             if qbd_field_name == "TermsRef_ListID" and odoo_field_name == "invoice_payment_term_id":
@@ -770,260 +1125,271 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
             logger.error(f"Failed to create Odoo invoice for QB Ref: {qb_invoice_data.get('ref_number')}")
             return None
 
+def create_or_update_odoo_payment(qb_payment_data: Dict[str, Any]) -> Optional[int]:
+    """
+    Placeholder for creating or updating an Odoo payment from QuickBooks payment data.
+    This function needs to be fully implemented.
+    """
+    logger.info(f"Placeholder: Processing QB Payment: {qb_payment_data}")
+    # TODO: Implement full logic for payment creation/update
+    # 1. Load payment mapping from field_mapping.json
+    # 2. Find related partner (customer)
+    # 3. Find related invoice(s) if applicable
+    # 4. Determine payment method/journal
+    # 5. Prepare Odoo payment payload
+    # 6. Check if payment exists (e.g., using a custom QB TxnID field on account.payment)
+    # 7. Create or update Odoo payment
+    # 8. Potentially reconcile with invoice(s)
+    return None
+
+def create_or_update_odoo_sales_order(qb_sales_order_data: Dict[str, Any]) -> Optional[int]:
+    """
+    Placeholder for creating or updating an Odoo sales order from QuickBooks sales order data.
+    This function needs to be fully implemented.
+    """
+    logger.info(f"Placeholder: Processing QB Sales Order: {qb_sales_order_data}")
+    # TODO: Implement full logic for sales order creation/update
+    # 1. Load sales order mapping from field_mapping.json
+    # 2. Find related partner (customer)
+    # 3. Prepare Odoo sales order payload (header and lines)
+    #    - Map products, quantities, prices
+    #    - Handle taxes, shipping, etc.
+    # 4. Check if sales order exists (e.g., using a custom QB TxnID field on sale.order)
+    # 5. Create or update Odoo sales order
+    return None
 
 def create_or_update_odoo_bill(qb_bill_data: Dict[str, Any]) -> Optional[int]:
     """
-    Creates or updates a vendor bill in Odoo from QuickBooks data using field_mapping.json.
+    Placeholder for creating or updating an Odoo bill (vendor bill) from QuickBooks bill data.
+    This function needs to be fully implemented.
     """
-    logger.info(f"Processing QB Bill: Ref {qb_bill_data.get('ref_number')}, Vendor: {qb_bill_data.get('vendor_name')}, TxnID: {qb_bill_data.get('qb_txn_id')}")
-    logger.debug(f"Full QB Bill data: {qb_bill_data}")
+    logger.info(f"Placeholder: Processing QB Bill: {qb_bill_data}")
+    # TODO: Implement full logic for bill creation/update
+    # 1. Load bill mapping from field_mapping.json
+    # 2. Find related partner (vendor)
+    # 3. Prepare Odoo bill payload (header and lines)
+    #    - Map products/expense accounts, quantities, prices
+    #    - Handle taxes, payment terms
+    # 4. Check if bill exists (e.g., using a custom QB TxnID field on account.move)
+    # 5. Create or update Odoo bill (move_type='in_invoice')
+    return None
 
-    bill_mapping = FIELD_MAPPING.get("entities", {}).get("Bills")
-    if not bill_mapping:
-        logger.error("Bill mapping not found in field_mapping.json. Cannot process bill.")
+def create_or_update_odoo_purchase_order(qb_purchase_order_data: Dict[str, Any]) -> Optional[int]:
+    """
+    Placeholder for creating or updating an Odoo purchase order from QuickBooks purchase order data.
+    This function needs to be fully implemented.
+    """
+    logger.info(f"Placeholder: Processing QB Purchase Order: {qb_purchase_order_data}")
+    # TODO: Implement full logic for purchase order creation/update
+    # 1. Load purchase order mapping from field_mapping.json
+    # 2. Find related partner (vendor)
+    # 3. Prepare Odoo purchase order payload (header and lines)
+    #    - Map products, quantities, prices
+    #    - Handle taxes, shipping terms
+    # 4. Check if purchase order exists (e.g., using a custom QB TxnID field on purchase.order)
+    # 5. Create or update Odoo purchase order
+    return None
+
+def create_or_update_odoo_journal_entry(qb_journal_entry_data):
+    logger.info("Placeholder: create_or_update_odoo_journal_entry called")
+    # TODO: Implement actual logic
+    return None
+
+def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Optional[int]:
+    """
+    Creates or updates a credit memo in Odoo from QuickBooks data using field_mapping.json.
+    Credit Memos are 'out_refund' in Odoo.
+    """
+    logger.info(f"Processing QB Credit Memo: Ref {qb_credit_memo_data.get('ref_number')}, Customer: {qb_credit_memo_data.get('customer_name')}, TxnID: {qb_credit_memo_data.get('qb_txn_id')}")
+    logger.debug(f"Full QB Credit Memo data: {qb_credit_memo_data}")
+
+    credit_memo_mapping = FIELD_MAPPING.get("entities", {}).get("CreditMemos")
+    if not credit_memo_mapping:
+        logger.error("Credit Memo mapping not found in field_mapping.json. Cannot process credit memo.")
         return None
 
-    # Ensure vendor (partner) exists
-    vendor_name = qb_bill_data.get("vendor_name")
-    if not vendor_name:
-        logger.error("Vendor name missing from QB bill data.")
+    # Ensure customer (partner) exists
+    customer_name = qb_credit_memo_data.get("customer_name")
+    if not customer_name:
+        logger.error("Customer name missing from QB credit memo data.")
         return None
     
-    odoo_partner_id = ensure_partner_exists(name=vendor_name, is_supplier=True, is_customer=False)
+    odoo_partner_id = ensure_partner_exists(name=customer_name, is_customer=True, is_supplier=False)
     if not odoo_partner_id:
-        logger.error(f"Failed to ensure Odoo partner for vendor: {vendor_name}.")
+        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}.")
         return None
 
-    # Determine Odoo journal for vendor bills
-    default_journal_name = bill_mapping.get("default_values", {}).get("journal_name", "Vendor Bills")
-    purchase_journal_id = ensure_journal_exists(default_journal_name)
-    if not purchase_journal_id:
-        logger.warning(f"Default purchase journal '{default_journal_name}' not found. Trying to find any purchase journal.")
+    # Determine Odoo journal (typically the same sales journal as invoices)
+    default_journal_name = credit_memo_mapping.get("default_values", {}).get("journal_name", "Customer Invoices") # Or a specific credit note journal
+    sales_journal_id = ensure_journal_exists(default_journal_name, journal_type_list=['sale'])
+    if not sales_journal_id:
+        logger.warning(f"Default sales/credit journal '{default_journal_name}' not found. Trying to find any sales journal.")
         journals = _odoo_rpc_call(
             "account.journal",
             "search_read",
-            args_list=[["type", "=", "purchase"]],
+            args_list=[[('type', '=', 'sale')]], # Corrected line
             kwargs_dict={"fields": ["id", "name"], "limit": 1}
         )
         if journals:
-            purchase_journal_id = journals[0]["id"]
-            logger.info(f"Found purchase journal '{journals[0].get('name', 'ID: '+str(purchase_journal_id))}' to use.")
+            sales_journal_id = journals[0]["id"]
+            logger.info(f"Found sales journal '{journals[0].get('name', 'ID: '+str(sales_journal_id))}' to use for credit memo.")
         else:
-            logger.error(f"Purchase journal '{default_journal_name}' not found in Odoo, and no other purchase journal available. Cannot create bill.")
+            logger.error(f"Sales journal for credit memos not found in Odoo. Cannot create credit memo.")
             return None
-
-    # Prepare bill lines
-    bill_lines_for_odoo = [] # Moved initialization to here
-
-    # Process Item Lines from QB Bill
-    for qb_line in qb_bill_data.get("item_lines", []):
+    # Prepare credit memo lines
+    credit_memo_lines_for_odoo = []
+    for qb_line in qb_credit_memo_data.get("lines", []):
         product_id = None
-        item_name = qb_line.get("item_name") # QBD Item Name/FullName
+        item_name = qb_line.get("item_name") # QBD Item Name (might be FullName)
         
         if item_name:
-            # Ensure product exists. Pass cost from bill line if available,
-            # ensure_product_exists will use it if it needs to update the master cost.
-            # For the transaction line itself, we'll use the cost from the bill line directly.
-            product_id = ensure_product_exists(
-                model_code=item_name, 
-                description=qb_line.get("description", item_name),
-                purchase_cost=qb_line.get("cost") # Pass cost to potentially update product master
-            )
+            # Attempt to find product by name (or default_code if mapping implies that)
+            product_id = ensure_product_exists(model_code=item_name, description=qb_line.get("description", item_name))
             if not product_id:
-                logger.warning(f"Could not ensure Odoo product for QB item '{item_name}'. Line description: '{qb_line.get('description')}'. Bill line may be incomplete.")
+                logger.warning(f"Could not ensure Odoo product for QB item '{item_name}'. Line description: '{qb_line.get('description')}'. Credit memo line may be incomplete or use a generic product.")
+                # TODO: Fallback to a generic "Sales" product or similar if configured
 
-        # Determine account for the item line.
-        # Priority: 1. QB Line Account (if any), 2. Item's Expense Account (from QB, mapped), 3. Default Purchase/Expense Account
-        line_account_name_qb = qb_line.get("account_name") 
+        # Determine account for the line. This is crucial.
+        # Priority: 1. QB Line Account, 2. Item's Income Account (from QB, mapped), 3. Default Sales/Income Account
+        line_account_name_qb = qb_line.get("account_name") # If QB provides account at line level (e.g. for non-item lines)
         odoo_line_account_id = None
 
         if line_account_name_qb:
-            odoo_line_account_id = ensure_account_exists(line_account_name_qb, account_type_hint="expense")
-        elif product_id: # If product exists, try to get its expense account from Odoo product
-            product_info = _odoo_rpc_call(
-                "product.product", "read", args_list=[product_id], kwargs_dict={"fields": ["property_account_expense_id", "product_tmpl_id"]}
+            odoo_line_account_id = ensure_account_exists(line_account_name_qb, account_type_hint="income")
+        elif product_id: # If product exists, try to get its income account from Odoo product.template
+            product_template_info = _odoo_rpc_call(
+                "product.product", "read", args_list=[product_id], kwargs_dict={"fields": ["property_account_income_id", "product_tmpl_id"]}
             )
-            if product_info and product_info[0].get("property_account_expense_id"):
-                odoo_line_account_id = product_info[0]["property_account_expense_id"][0]
-            elif product_info and product_info[0].get("product_tmpl_id"): # Check template
-                 template_id = product_info[0]["product_tmpl_id"][0]
+            if product_template_info and product_template_info[0].get("property_account_income_id"):
+                odoo_line_account_id = product_template_info[0]["property_account_income_id"][0] # It's a tuple (id, name)
+            elif product_template_info and product_template_info[0].get("product_tmpl_id"): # Check template
+                 template_id = product_template_info[0]["product_tmpl_id"][0]
                  template_info_full = _odoo_rpc_call(
-                    "product.template", "read", args_list=[template_id], kwargs_dict={"fields": ["property_account_expense_id"]}
+                    "product.template", "read", args_list=[template_id], kwargs_dict={"fields": ["property_account_income_id"]}
                  )
-                 if template_info_full and template_info_full[0].get("property_account_expense_id"):
-                     odoo_line_account_id = template_info_full[0]["property_account_expense_id"][0]
+                 if template_info_full and template_info_full[0].get("property_account_income_id"):
+                     odoo_line_account_id = template_info_full[0]["property_account_income_id"][0]
 
 
         if not odoo_line_account_id:
-            default_expense_account_name = "Cost of Goods Sold" # Placeholder, should be from config or journal
-            logger.warning(f"Expense account for item line '{qb_line.get('description', item_name)}' not determined. Falling back to default '{default_expense_account_name}'.")
-            odoo_line_account_id = ensure_account_exists(default_expense_account_name, account_type_hint="expense")
+            # Fallback to a default income account if no specific account found
+            # This default should ideally be configurable or derived from journal
+            default_income_account_name = "Sales" # Placeholder, should be from config or account_crosswalk
+            logger.warning(f"Income account for line '{qb_line.get('description', item_name)}' not determined. Falling back to default '{default_income_account_name}'.")
+            odoo_line_account_id = ensure_account_exists(default_income_account_name, account_type_hint="income")
 
         if not odoo_line_account_id:
-            logger.error(f"Failed to determine or create expense account for bill item line: '{qb_line.get('description', item_name)}'. Skipping line.")
-            continue
+            logger.error(f"Failed to determine or create income account for credit memo line: '{qb_line.get('description', item_name)}'. Skipping line.")
+            continue # Skip this line if account cannot be resolved
 
         line_data = {
             "product_id": product_id,
             "name": qb_line.get("description") or item_name or "N/A",
             "quantity": qb_line.get("quantity", 0.0),
-            "price_unit": qb_line.get("cost", 0.0), # Use 'cost' from QB bill line for price_unit on vendor bill
+            "price_unit": qb_line.get("rate", 0.0),
             "account_id": odoo_line_account_id,
-            # "tax_ids": [] # Placeholder for tax mapping
+            # "tax_ids": [] # Placeholder for tax mapping - complex, requires tax service
         }
-        bill_lines_for_odoo.append((0, 0, line_data))
-
-
-    # Process Expense Lines from QB Bill
-    for qb_line in qb_bill_data.get("expense_lines", []):
-        account_name_qb = qb_line.get("account_name")
-        if not account_name_qb:
-            logger.warning("Expense line missing account name. Skipping line.")
-            continue
         
-        odoo_line_account_id = ensure_account_exists(account_name_qb, account_type_hint="expense")
-        if not odoo_line_account_id:
-            logger.error(f"Failed to ensure Odoo account for QB expense account '{account_name_qb}'. Skipping line.")
-            continue
-            
-        line_data = {
-            # No product_id for pure expense lines unless you map them to a generic "Expense" service product
-            "name": qb_line.get("memo") or account_name_qb, # Description for the line
-            "quantity": 1, # Expense lines usually have quantity 1
-            "price_unit": qb_line.get("amount", 0.0),
-            "account_id": odoo_line_account_id,
-            # "tax_ids": [] # Placeholder for tax mapping
-        }
-        bill_lines_for_odoo.append((0, 0, line_data))
+        # TODO: Tax mapping. This is highly dependent on how taxes are set up in QB and Odoo.
+        # qb_tax_code_ref = qb_line.get("tax_code_ref_full_name")
+        # if qb_tax_code_ref:
+        #   odoo_tax_ids = map_qb_tax_to_odoo(qb_tax_code_ref) # This function would need to be created
+        #   if odoo_tax_ids:
+        #       line_data["tax_ids"] = [(6, 0, odoo_tax_ids)]
 
+        credit_memo_lines_for_odoo.append((0, 0, line_data))
 
-    if not bill_lines_for_odoo and (qb_bill_data.get("item_lines") or qb_bill_data.get("expense_lines")):
-        logger.warning(f"No lines could be processed for QB Bill Ref {qb_bill_data.get('ref_number')}. Bill will not be created/updated if it has no lines.")
+    if not credit_memo_lines_for_odoo and qb_credit_memo_data.get("lines"): # Only warn if there were lines to process
+        logger.warning(f"No lines could be processed for QB Credit Memo Ref {qb_credit_memo_data.get('ref_number')}. Credit Memo will not be created/updated if it has no lines.")
+        # Depending on Odoo rules, a credit memo with no lines might not be allowed.
+        # For now, we'll let it try, Odoo will reject if invalid.
 
-    # Prepare Odoo bill payload
-    odoo_bill_payload = {
-        "move_type": bill_mapping.get("default_values", {}).get("move_type", "in_invoice"),
+    # Prepare Odoo credit memo payload using field_mapping.json
+    odoo_credit_memo_payload = {
+        "move_type": credit_memo_mapping.get("default_values", {}).get("move_type", "out_refund"),
         "partner_id": odoo_partner_id,
-        "journal_id": purchase_journal_id,
-        "invoice_line_ids": bill_lines_for_odoo,
-        "x_qb_txn_id": qb_bill_data.get("qb_txn_id") # Custom field for QB TxnID
+        "journal_id": sales_journal_id,
+        "invoice_line_ids": credit_memo_lines_for_odoo,
+        "x_qb_txn_id": qb_credit_memo_data.get("qb_txn_id") 
     }
 
-    # Map header fields from qb_bill_data to odoo_bill_payload
-    for mapping_item in bill_mapping.get("fields", []):
+    # Map fields from qb_credit_memo_data to odoo_credit_memo_payload based on field_mapping
+    for mapping_item in credit_memo_mapping.get("fields", []):
         qbd_field_name = mapping_item["qbd_field"]
         odoo_field_name = mapping_item["odoo_field"]
 
-        if qbd_field_name in qb_bill_data:
-            value = qb_bill_data[qbd_field_name]
-            if "date" in odoo_field_name and isinstance(value, str):
+        if qbd_field_name in qb_credit_memo_data:
+            value = qb_credit_memo_data[qbd_field_name]
+            # Basic transformations can be added here if needed (e.g., date formatting)
+            if "date" in odoo_field_name and isinstance(value, str): # Ensure date format if necessary
                 try:
-                    datetime.strptime(value, "%Y-%m-%d")
+                    # Assuming QB dates are YYYY-MM-DD. If not, parse and reformat.
+                    datetime.strptime(value, "%Y-%m-%d") 
                 except ValueError:
                     logger.warning(f"Date field {qbd_field_name} ('{value}') is not in YYYY-MM-DD format. Odoo might reject.")
+                pass 
             
-            # Handle special cases like TermsRef_ListID mapping
-            if qbd_field_name == "TermsRef_ListID" and odoo_field_name == "invoice_payment_term_id":
-                # qb_term_name = qb_bill_data.get("terms_name") 
-                # if qb_term_name:
-                #   odoo_term_id = ensure_payment_term_exists(qb_term_name) # Helper needed
-                #   if odoo_term_id: odoo_bill_payload[odoo_field_name] = odoo_term_id
-                pass # Placeholder for term mapping
-
             elif odoo_field_name not in ["partner_id", "journal_id", "invoice_line_ids", "move_type", "x_qb_txn_id"]:
-                 odoo_bill_payload[odoo_field_name] = value
-    
-    # Search for existing bill in Odoo using QB TxnID
-    existing_bill_id = None
-    if qb_bill_data.get("qb_txn_id"):
-        logger.info(f"Searching for existing Odoo bill with x_qb_txn_id: {qb_bill_data.get('qb_txn_id')}")
-        existing_bills = _odoo_rpc_call(
+                odoo_credit_memo_payload[odoo_field_name] = value
+
+    # Search for existing credit memo in Odoo using QB TxnID
+    existing_credit_memo_id = None
+    if qb_credit_memo_data.get("qb_txn_id"):
+        logger.info(f"Searching for existing Odoo credit memo with x_qb_txn_id: {qb_credit_memo_data.get('qb_txn_id')}")
+        existing_credit_memos = _odoo_rpc_call(
             model="account.move",
             method="search_read",
-            args_list=[["x_qb_txn_id", "=", qb_bill_data.get("qb_txn_id")], ["move_type", "=", "in_invoice"]],
+            args_list=[["x_qb_txn_id", "=", qb_credit_memo_data.get("qb_txn_id")], ["move_type", "=", "out_refund"]],
             kwargs_dict={"fields": ["id"], "limit": 1}
         )
-        if existing_bills:
-            existing_bill_id = existing_bills[0]["id"]
-            logger.info(f"Found existing Odoo bill ID: {existing_bill_id} for QB TxnID: {qb_bill_data.get('qb_txn_id')}")
+        if existing_credit_memos:
+            existing_credit_memo_id = existing_credit_memos[0]["id"]
+            logger.info(f"Found existing Odoo credit memo ID: {existing_credit_memo_id} for QB TxnID: {qb_credit_memo_data.get('qb_txn_id')}")
 
-    if existing_bill_id:
-        # Update existing bill
-        update_payload = {k: v for k, v in odoo_bill_payload.items() if k != "move_type"}
+    if existing_credit_memo_id:
+        update_payload = {k: v for k, v in odoo_credit_memo_payload.items() if k != "move_type"} # move_type cannot be changed
+
+        # For lines, to replace all:
         if "invoice_line_ids" in update_payload:
-             update_payload["invoice_line_ids"] = [(5, 0, 0)] + bill_lines_for_odoo # Replace all lines
-        
-        logger.info(f"Attempting to update Odoo bill ID: {existing_bill_id}")
-        logger.debug(f"Odoo Bill Update Payload: {update_payload}")
+            update_payload["invoice_line_ids"] = [(5, 0, 0)] + credit_memo_lines_for_odoo
+
+        logger.info(f"Attempting to update Odoo credit memo ID: {existing_credit_memo_id}")
+        logger.debug(f"Odoo Credit Memo Update Payload: {update_payload}")
         success = _odoo_rpc_call(
             model="account.move",
             method="write",
-            args_list=[[existing_bill_id], update_payload]
+            args_list=[[existing_credit_memo_id], update_payload]
         )
         if success:
-            logger.info(f"Successfully updated Odoo bill ID: {existing_bill_id}")
-            # Optionally, re-post the bill if its state changed to 'draft'
-            # current_state = _odoo_rpc_call("account.move", "read", args=[existing_bill_id], kwargs_rpc={"fields": ["state"]})
-            # if current_state and current_state[0]['state'] == 'draft':
-            #    _odoo_rpc_call(model="account.move", method="action_post", args=[[existing_bill_id]])
-            #    logger.info(f"Posted updated bill {existing_bill_id}")
-            return existing_bill_id
+            logger.info(f"Successfully updated Odoo credit memo ID: {existing_credit_memo_id}")
+            return existing_credit_memo_id
         else:
-            logger.error(f"Failed to update Odoo bill ID: {existing_bill_id}")
+            logger.error(f"Failed to update Odoo credit memo ID: {existing_credit_memo_id}")
             return None
     else:
-        # Create new bill
-        logger.info("Attempting to create new Odoo bill.")
-        logger.debug(f"Odoo Bill Create Payload: {odoo_bill_payload}")
+        # Create new credit memo
+        logger.info("Attempting to create new Odoo credit memo.")
+        logger.debug(f"Odoo Credit Memo Create Payload: {odoo_credit_memo_payload}")
 
-        if not bill_lines_for_odoo and (qb_bill_data.get("item_lines") or qb_bill_data.get("expense_lines")):
-             logger.error(f"No processable lines for new QB Bill Ref {qb_bill_data.get('ref_number')}. Creation aborted.")
-             return None
-        if not odoo_bill_payload.get("invoice_line_ids"):
-            logger.warning(f"Creating bill {qb_bill_data.get('ref_number')} with no lines. Odoo may reject this.")
+        # Check if there are any lines, as Odoo might require lines for a credit memo
+        if not credit_memo_lines_for_odoo and qb_credit_memo_data.get("lines"): # If QB had lines but we processed none
+            logger.error(f"No processable lines for new QB Credit Memo Ref {qb_credit_memo_data.get('ref_number')}. Creation aborted.")
+            return None
+        if not odoo_credit_memo_payload.get("invoice_line_ids"): # If payload has no lines at all
+            logger.warning(f"Creating credit memo {qb_credit_memo_data.get('ref_number')} with no lines. Odoo may reject this.")
 
-        new_bill_id = _odoo_rpc_call(
+        new_credit_memo_id = _odoo_rpc_call(
             model="account.move",
             method="create",
-            args_list=[odoo_bill_payload]
+            args_list=[odoo_credit_memo_payload]
         )
-        if new_bill_id:
-            logger.info(f"Successfully created Odoo bill with ID: {new_bill_id} for QB TxnID: {qb_bill_data.get('qb_txn_id')}")
-            _odoo_rpc_call(model="account.move", method="action_post", args=[[new_bill_id]])
-            logger.info(f"Posted newly created bill {new_bill_id}")
-            return new_bill_id
+        if new_credit_memo_id:
+            logger.info(f"Successfully created Odoo credit memo with ID: {new_credit_memo_id} for QB TxnID: {qb_credit_memo_data.get('qb_txn_id')}")
+            # Post the newly created credit memo
+            _odoo_rpc_call(model="account.move", method="action_post", args=[[new_credit_memo_id]])
+            logger.info(f"Posted newly created credit memo {new_credit_memo_id}")
+            return new_credit_memo_id
         else:
-            logger.error(f"Failed to create Odoo bill for QB Ref: {qb_bill_data.get('ref_number')}")
+            logger.error(f"Failed to create Odoo credit memo for QB Ref: {qb_credit_memo_data.get('ref_number')}")
             return None
-
-def create_or_update_odoo_payment(qb_payment_data: Dict[str, Any]) -> Optional[int]:
-    """
-    Placeholder: Creates or reconciles a payment in Odoo from QuickBooks data.
-    This is complex due to matching payments to invoices.
-    """
-    logger.info(f"Received QB Payment data for Odoo processing: TxnID {qb_payment_data.get('qb_txn_id')}, Customer: {qb_payment_data.get('customer_name')}")
-    logger.debug(f"Full QB Payment data: {qb_payment_data}")
-
-    customer_name = qb_payment_data.get("customer_name")
-    if not customer_name:
-        logger.error("Cannot process payment: Customer name is missing from QB data.")
-        return None
-
-    odoo_partner_id = ensure_partner_exists(name=customer_name, is_customer=True, is_supplier=False)
-    if not odoo_partner_id:
-        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}. Cannot process payment.")
-        return None
-    logger.info(f"Ensured Odoo partner ID {odoo_partner_id} for customer '{customer_name}'.")
-
-    # TODO: Determine Odoo journal for customer payments (e.g., "Bank" or "Cash" journal)
-    # payment_journal_id = ensure_journal_exists("Bank") # Or based on QB PaymentMethodRef/DepositToAccountRef mapping
-    # if not payment_journal_id:
-    #     logger.error("Payment journal not found in Odoo. Cannot create payment.")
-    #     return None
-    
-    # TODO: Logic for creating account.payment record in Odoo.
-    # This involves:
-    # 1. Creating the payment record itself.
-    # 2. Reconciling it against the Odoo invoices that correspond to qb_payment_data["applied_to_txns"].
-    #    - This requires finding the Odoo invoice IDs based on the qb_invoice_txn_id.
-    #      (Requires storing QB TxnID in Odoo invoices or a reliable mapping).

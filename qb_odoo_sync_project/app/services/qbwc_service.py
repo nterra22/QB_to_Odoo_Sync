@@ -55,6 +55,79 @@ QBWC_PASSWORD = "odoo123"
 # QBWC Service State (for iterator management)
 qbwc_session_state: Dict[str, Dict[str, Any]] = {}
 
+
+def _get_xml_text(element: Optional[ET.Element], default: Optional[str] = None) -> Optional[str]:
+    """Safely get text from an XML element."""
+    if element is not None and element.text is not None:
+        return element.text.strip()
+    return default
+
+def _extract_address_data(address_element: Optional[ET.Element], prefix: str) -> Dict[str, Any]:
+    """Helper to extract address components."""
+    data = {}
+    if address_element is not None:
+        data[f"{prefix}_Addr1"] = _get_xml_text(address_element.find('Addr1'))
+        data[f"{prefix}_Addr2"] = _get_xml_text(address_element.find('Addr2'))
+        data[f"{prefix}_Addr3"] = _get_xml_text(address_element.find('Addr3')) # QB can have Addr3, Addr4, Addr5
+        data[f"{prefix}_Addr4"] = _get_xml_text(address_element.find('Addr4'))
+        data[f"{prefix}_Addr5"] = _get_xml_text(address_element.find('Addr5'))
+        data[f"{prefix}_City"] = _get_xml_text(address_element.find('City'))
+        data[f"{prefix}_State"] = _get_xml_text(address_element.find('State'))
+        data[f"{prefix}_PostalCode"] = _get_xml_text(address_element.find('PostalCode'))
+        data[f"{prefix}_Country"] = _get_xml_text(address_element.find('Country'))
+    return data
+
+def _extract_customer_data_from_ret(customer_ret_xml: ET.Element) -> Dict[str, Any]:
+    """Extracts detailed customer data from a CustomerRet XML element."""
+    data = {
+        "ListID": _get_xml_text(customer_ret_xml.find('ListID')),
+        "Name": _get_xml_text(customer_ret_xml.find('Name')),
+        "FullName": _get_xml_text(customer_ret_xml.find('FullName')),
+        "CompanyName": _get_xml_text(customer_ret_xml.find('CompanyName')),
+        "FirstName": _get_xml_text(customer_ret_xml.find('FirstName')),
+        "LastName": _get_xml_text(customer_ret_xml.find('LastName')),
+        "Email": _get_xml_text(customer_ret_xml.find('Email')),
+        "Phone": _get_xml_text(customer_ret_xml.find('Phone')),
+        "AltPhone": _get_xml_text(customer_ret_xml.find('AltPhone')),
+        "Fax": _get_xml_text(customer_ret_xml.find('Fax')),
+        "Contact": _get_xml_text(customer_ret_xml.find('Contact')), # Primary contact name
+        "AltContact": _get_xml_text(customer_ret_xml.find('AltContact')),
+        "Notes": _get_xml_text(customer_ret_xml.find('Notes')),
+        "IsActive": _get_xml_text(customer_ret_xml.find('IsActive')) == 'true',
+        "Sublevel": _get_xml_text(customer_ret_xml.find('Sublevel')),
+        "ParentRef_ListID": _get_xml_text(customer_ret_xml.find('ParentRef/ListID')),
+        "ParentRef_FullName": _get_xml_text(customer_ret_xml.find('ParentRef/FullName')),
+        "CustomerTypeRef_ListID": _get_xml_text(customer_ret_xml.find('CustomerTypeRef/ListID')),
+        "CustomerTypeRef_FullName": _get_xml_text(customer_ret_xml.find('CustomerTypeRef/FullName')),
+        "TermsRef_ListID": _get_xml_text(customer_ret_xml.find('TermsRef/ListID')),
+        "TermsRef_FullName": _get_xml_text(customer_ret_xml.find('TermsRef/FullName')),
+        "SalesRepRef_ListID": _get_xml_text(customer_ret_xml.find('SalesRepRef/ListID')),
+        "SalesRepRef_FullName": _get_xml_text(customer_ret_xml.find('SalesRepRef/FullName')),
+        "Balance": _get_xml_text(customer_ret_xml.find('Balance')),
+        "TotalBalance": _get_xml_text(customer_ret_xml.find('TotalBalance')),
+        "JobStatus": _get_xml_text(customer_ret_xml.find('JobStatus')),
+        # Add more fields as needed from CustomerRet
+    }
+    data.update(_extract_address_data(customer_ret_xml.find('BillAddress'), 'BillAddress'))
+    data.update(_extract_address_data(customer_ret_xml.find('ShipAddress'), 'ShipAddress'))
+    
+    # Extract additional contacts if present (ContactsRet)
+    # This part might need adjustment based on how you want to map multiple contacts in Odoo
+    contacts_ret = customer_ret_xml.findall('ContactsRet')
+    additional_contacts = []
+    for contact_xml in contacts_ret:
+        additional_contacts.append({
+            "ListID": _get_xml_text(contact_xml.find('ListID')),
+            "FirstName": _get_xml_text(contact_xml.find('FirstName')),
+            "LastName": _get_xml_text(contact_xml.find('LastName')),
+            "Salutation": _get_xml_text(contact_xml.find('Salutation')),
+        })
+    if additional_contacts:
+        data["AdditionalContacts"] = additional_contacts
+
+    # Filter out None values to keep the payload clean
+    return {k: v for k, v in data.items() if v is not None}
+
 class QBWCService(ServiceBase):
     """QuickBooks Web Connector SOAP service implementation."""
 
@@ -475,7 +548,7 @@ class QBWCService(ServiceBase):
       {include_line_items_xml}
       <MaxReturned>50</MaxReturned>
     </SalesOrderQueryRq>
-  </QBXMLMsgsRq>
+  </QBXML>
 </QBXML>'''
             elif entity == PURCHASEORDER_QUERY: # New
                 params = current_task.get("params", {})
@@ -588,25 +661,27 @@ class QBWCService(ServiceBase):
                         if status_code == '0': # Success
                             customers = customer_query_rs.findall('.//CustomerRet')
                             logger.info(f"Received {len(customers)} customers in this response.")
-                            for cust in customers:
-                                list_id = cust.find('ListID')
-                                name_elem = cust.find('Name')
+                            for cust_xml in customers: # Renamed cust to cust_xml for clarity
+                                list_id_elem = cust_xml.find('ListID') # Corrected: use cust_xml
+                                customer_list_id = list_id_elem.text if list_id_elem is not None else 'N/A'
                                 
-                                customer_name = name_elem.text if name_elem is not None and name_elem.text else None
+                                qb_customer_data = _extract_customer_data_from_ret(cust_xml)
                                 
-                                if customer_name:
-                                    logger.info(f"  Processing Customer: {customer_name} (ListID: {list_id.text if list_id is not None else 'N/A'})")
+                                customer_name_for_log = qb_customer_data.get("Name", qb_customer_data.get("FullName", f"ListID: {customer_list_id}"))
+
+                                if qb_customer_data: # Ensure data was extracted
+                                    logger.info(f"  Processing Customer: {customer_name_for_log} (ListID: {customer_list_id})")
+                                    logger.debug(f"    Extracted QB Customer Data: {qb_customer_data}")
                                     try:
-                                        # TODO: Enhance ensure_partner_exists to take more details from 'cust' element if needed
-                                        odoo_partner_id = ensure_partner_exists(name=customer_name)
+                                        odoo_partner_id = create_or_update_odoo_partner(qb_customer_data)
                                         if odoo_partner_id:
-                                            logger.info(f"    Ensured Odoo partner for '{customer_name}' exists with ID: {odoo_partner_id}")
+                                            logger.info(f"    Successfully processed customer '{customer_name_for_log}' for Odoo. Odoo Partner ID: {odoo_partner_id}")
                                         else:
-                                            logger.warning(f"    Could not ensure Odoo partner for '{customer_name}'.")
+                                            logger.warning(f"    Could not create or update Odoo partner for '{customer_name_for_log}'.")
                                     except Exception as e:
-                                        logger.error(f"    Error processing customer '{customer_name}' for Odoo: {e}", exc_info=True)
+                                        logger.error(f"    Error processing customer '{customer_name_for_log}' for Odoo: {e}", exc_info=True)
                                 else:
-                                    logger.warning(f"  Skipping customer with missing name (ListID: {list_id.text if list_id is not None else 'N/A'}).")
+                                    logger.warning(f"  Skipping customer with missing/empty data (ListID: {customer_list_id}).")
 
                             iterator_id = customer_query_rs.get("iteratorID")
                             iterator_remaining_count = customer_query_rs.get("iteratorRemainingCount")
