@@ -287,7 +287,11 @@ def get_odoo_state_id(state_identifier: str, country_code: Optional[str] = None)
     return None
 
 def get_odoo_partner_category_ids(category_names: List[str]) -> List[int]:
-    """Finds Odoo partner category IDs (tags) by their names."""
+    """Finds Odoo partner category IDs (tags) by their names.
+    
+    NOTE: Partner categories are ignored as per configuration.
+    This function always returns an empty list to skip category assignment.
+    """
     if not category_names:
         return []
     
@@ -295,55 +299,57 @@ def get_odoo_partner_category_ids(category_names: List[str]) -> List[int]:
     if not sanitized_names:
         return []
 
-    domain = [('name', 'in', sanitized_names)]
-    categories = _odoo_rpc_call(
-        "res.partner.category", "search_read",
-        args_list=[domain],
-        kwargs_dict={"fields": ["id", "name"]}
-    )
+    # Log that we're ignoring categories but don't warn
+    logger.debug(f"Ignoring partner categories as configured: {sanitized_names}")
     
-    found_ids = []
-    if categories:
-        found_names_map = {cat['name']: cat['id'] for cat in categories}
-        for name in sanitized_names:
-            if name in found_names_map:
-                found_ids.append(found_names_map[name])
-            else:
-                logger.warning(f"Odoo partner category (tag) not found for name: '{name}'. It will not be assigned. Consider creating it in Odoo.")
-    else: # No categories found at all for the given names
-        for name in sanitized_names:
-            logger.warning(f"Odoo partner category (tag) not found for name: '{name}'. It will not be assigned.")
-            
-    return found_ids
+    # Always return empty list to skip category assignment
+    return []
 
 def get_odoo_payment_term_id(payment_term_name: str) -> Optional[int]:
-    """Finds an Odoo payment term ID by its name."""
-    if not payment_term_name or not payment_term_name.strip():
-        logger.debug("Empty payment term name provided.")
-        return None
+    """Finds an Odoo payment term ID by its name.
     
-    name_to_search = payment_term_name.strip()
+    Always returns the ID for "Due on Receipt" payment term as default.
+    If that term doesn't exist, will try to find or create it.
+    """
+    # Always default to "Due on Receipt"
+    default_term_name = "Due on Receipt"
     
+    # First, try to find "Due on Receipt" term
     terms = _odoo_rpc_call(
         "account.payment.term", "search_read",
-        args_list=[[("name", "=", name_to_search)]],
+        args_list=[[("name", "=", default_term_name)]],
         kwargs_dict={"fields": ["id"], "limit": 1}
     )
+    
     if terms:
+        logger.debug(f"Using default payment term '{default_term_name}' (ID: {terms[0]['id']}) instead of '{payment_term_name}'")
         return terms[0]["id"]
-    else:
-        # Fallback: try case-insensitive search if exact match fails
-        terms_ilike = _odoo_rpc_call(
-            "account.payment.term", "search_read",
-            args_list=[[("name", "ilike", name_to_search)]],
-            kwargs_dict={"fields": ["id"], "limit": 1}
-        )
-        if terms_ilike:
-            logger.info(f"Found payment term using 'ilike' for '{name_to_search}'. ID: {terms_ilike[0]['id']}")
-            return terms_ilike[0]['id']
-        
-        logger.warning(f"Odoo payment term not found for name: '{name_to_search}'.")
-        return None
+    
+    # If "Due on Receipt" doesn't exist, try case-insensitive search
+    terms_ilike = _odoo_rpc_call(
+        "account.payment.term", "search_read",
+        args_list=[[("name", "ilike", default_term_name)]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    
+    if terms_ilike:
+        logger.debug(f"Found default payment term using 'ilike' for '{default_term_name}' (ID: {terms_ilike[0]['id']}) instead of '{payment_term_name}'")
+        return terms_ilike[0]["id"]
+    
+    # If we still can't find it, look for "Immediate Payment" as fallback
+    immediate_terms = _odoo_rpc_call(
+        "account.payment.term", "search_read",
+        args_list=[[("name", "ilike", "Immediate Payment")]],
+        kwargs_dict={"fields": ["id"], "limit": 1}
+    )
+    
+    if immediate_terms:
+        logger.debug(f"Using 'Immediate Payment' as fallback payment term (ID: {immediate_terms[0]['id']}) instead of '{payment_term_name}'")
+        return immediate_terms[0]["id"]
+    
+    # Last resort: return None and let Odoo use its default
+    logger.warning(f"Could not find default payment term '{default_term_name}' or 'Immediate Payment'. Odoo will use its system default.")
+    return None
 
 def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any], is_supplier: bool = False) -> Optional[int]:
     """
