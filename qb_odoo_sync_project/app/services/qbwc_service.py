@@ -6,9 +6,9 @@ via the QuickBooks Web Connector application.
 """
 from spyne import rpc, ServiceBase, Unicode, Iterable
 from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
 import xml.etree.ElementTree as ET
 import logging
-from typing import Dict, Any, Optional
 import json
 import inspect
 
@@ -385,10 +385,108 @@ class QBWCService(ServiceBase):
     def receiveResponseXML(self, ticket, response, hresult, message):
         """
         Receives the response from QuickBooks for the last request.
+        Processes the data and returns a percentage indicating progress.
         """
+        self._log_method_call(self.ctx)
         logger.info("receiveResponseXML called.")
-        # ... (rest of the method implementation)
-        return 0 # Placeholder
+        
+        session_data = qbwc_session_state.get(ticket)
+        if not session_data:
+            logger.error("Invalid ticket received in receiveResponseXML.")
+            return 101 # An error has occurred, QBWC will call getLastError
+
+        if hresult:
+            error_message = f"receiveResponseXML received an error. HRESULT: {hresult}, Message: {message}"
+            logger.error(error_message)
+            session_data["last_error"] = error_message
+            save_qbwc_session_state()
+            return 101
+
+        logger.debug(f"Received XML response for ticket {ticket}:\n{response}")
+
+        try:
+            root = ET.fromstring(response)
+            
+            current_task_index = session_data.get("current_task_index", 0)
+            tasks = session_data.get("tasks", [])
+            
+            if current_task_index >= len(tasks):
+                logger.info("All tasks seem to be completed. Nothing to process in receiveResponseXML.")
+                return 100
+
+            active_task = tasks[current_task_index]
+            entity = active_task["entity"]
+            total_tasks = len(tasks)
+            progress = 0
+
+            response_rs = root.find(f".//{entity}Rs")
+            if response_rs is not None:
+                status_code = response_rs.get('statusCode', 'unknown')
+                status_message = response_rs.get('statusMessage', 'N/A')
+
+                if status_code == '0':
+                    logger.info(f"Successfully processed {entity} response (statusCode=0).")
+                    
+                    # Process data based on entity
+                    if entity == CUSTOMER_QUERY:
+                        for customer_ret in response_rs.findall('.//CustomerRet'):
+                            customer_data = _extract_customer_data_from_ret(customer_ret)
+                            create_or_update_odoo_partner(customer_data, is_customer=True)
+                    elif entity == VENDOR_QUERY:
+                        for vendor_ret in response_rs.findall('.//VendorRet'):
+                            # NOTE: Using customer extractor for vendor. Create a specific one if needed.
+                            vendor_data = _extract_customer_data_from_ret(vendor_ret)
+                            create_or_update_odoo_partner(vendor_data, is_customer=False)
+                    elif entity == INVOICE_QUERY:
+                        for invoice_ret in response_rs.findall('.//InvoiceRet'):
+                            invoice_data = _extract_transaction_data(invoice_ret, is_sales_txn=True)
+                            create_or_update_odoo_invoice(invoice_data)
+
+                    # Handle iterator for paginated responses
+                    iterator_id = response_rs.get("iteratorID")
+                    iterator_remaining_count = response_rs.get("iteratorRemainingCount")
+
+                    if iterator_id and int(iterator_remaining_count) > 0:
+                        logger.info(f"Iterator active for {entity}. Remaining: {iterator_remaining_count}. Continuing.")
+                        active_task["iteratorID"] = iterator_id
+                        # Calculate progress for ongoing task
+                        progress = int((current_task_index + 0.5) * 100 / total_tasks)
+                    else:
+                        logger.info(f"Finished iterating for {entity}. Moving to next task.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                        progress = int(session_data["current_task_index"] * 100 / total_tasks)
+                else:
+                    error_msg = f"{entity} query failed with statusCode {status_code}: {status_message}"
+                    logger.error(error_msg)
+                    session_data["last_error"] = error_msg
+                    session_data["current_task_index"] += 1 # Move to next task on error
+                    progress = int(session_data["current_task_index"] * 100 / total_tasks)
+            else:
+                logger.warning(f"Could not find {entity}Rs in the response XML. Moving to next task.")
+                session_data["current_task_index"] += 1
+                progress = int(session_data["current_task_index"] * 100 / total_tasks)
+
+            if session_data["current_task_index"] >= total_tasks:
+                logger.info("All tasks for this session have been completed.")
+                progress = 100
+            
+            save_qbwc_session_state()
+            logger.info(f"receiveResponseXML returning progress: {progress}%")
+            return progress
+
+        except ET.ParseError as e:
+            error_msg = f"XML ParseError in receiveResponseXML: {e}"
+            logger.error(error_msg, exc_info=True)
+            session_data["last_error"] = error_msg
+            save_qbwc_session_state()
+            return 101
+        except Exception as e:
+            error_msg = f"An unexpected error occurred in receiveResponseXML: {e}"
+            logger.error(error_msg, exc_info=True)
+            session_data["last_error"] = error_msg
+            save_qbwc_session_state()
+            return 101
 
     @rpc(Unicode, _returns=Unicode)
     def getLastError(self, ticket):
