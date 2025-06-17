@@ -16,7 +16,7 @@ from app import create_app
 # Hardcoded configuration values
 ODOO_URL = "https://nterra22-sounddecision-odoo-develop-20178686.dev.odoo.com/"
 ODOO_DB = os.getenv("ODOO_DB", "nterra22-sounddecision-odoo-develop-20178686") 
-ODOO_USER_ID = os.getenv("it@wadic.net") # This can remain as is, or be hardcoded if needed
+ODOO_USER_ID = "it@wadic.net" # This can remain as is, or be hardcoded if needed
 ODOO_API_KEY = "e8188dcec4b36dbc1e89e4da17b989c7aae8e568" # Directly use the provided API key
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 5000  # Back to original working port
