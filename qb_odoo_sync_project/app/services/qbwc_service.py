@@ -79,6 +79,18 @@ def save_qbwc_session_state():
 # This helps persist sessions across server restarts.
 load_qbwc_session_state()
 
+def _compute_overall_progress(session_data):
+    """Return an int 0-100 representing overall sync progress.
+    Keeps the value ≤ 99 until the final task is complete so QBWC
+    continues requesting work.
+    """
+    total = session_data.get("total_tasks") or len(session_data.get("task_queue", [])) or 1
+    done = session_data.get("current_task_index", 0)
+    if done >= total:
+        return 100
+    pct = int(done * 100 / total)
+    return min(pct, 99)  # ensure 0-99 until the last task
+
 def _get_xml_text(element: Optional[ET.Element], default: Optional[str] = None) -> Optional[str]:
     """Safely get text from an XML element."""
     if element is not None and element.text is not None:
@@ -273,13 +285,13 @@ class QBWCService(ServiceBase):
                         # "TxnDateRangeFilter" removed
                         "IncludeLineItems": "true" 
                     }
-                }
-                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
+                }                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
             ]
 
             qbwc_session_state[session_key] = {
                 "task_queue": initial_tasks,
                 "current_task_index": 0, # Pointer to the current task in the queue
+                "total_tasks": len(initial_tasks),  # NEW: Store total task count
                 "last_error": "No error",
                 "created_at": datetime.now(),
                 "company_file_name": None, # Will be set by QBWC
@@ -648,6 +660,8 @@ class QBWCService(ServiceBase):
                 session_data["current_task_index"] += 1
                 logger.info(f"Incremented current_task_index to {session_data['current_task_index']} after empty response.")
                 progress = 100
+                if progress != 50:  # 50 signals QBWC to re-query this same iterator page
+                    progress = _compute_overall_progress(session_data)
                 save_qbwc_session_state()
                 return str(progress)
 
@@ -1311,10 +1325,14 @@ class QBWCService(ServiceBase):
                 active_task["iteratorID"] = None
             session_data["current_task_index"] += 1
             save_qbwc_session_state()
-            return "0"            
+            return "0"
+            
         if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
             logger.info("All tasks in the current queue are processed.")
             progress = 100
+        
+        if progress != 50:  # 50 signals QBWC to re-query this same iterator page
+            progress = _compute_overall_progress(session_data)
         
         save_qbwc_session_state()
         logger.info(f"receiveResponseXML: Task index now: {session_data['current_task_index']}, Total tasks: {len(session_data.get('task_queue', []))}")
