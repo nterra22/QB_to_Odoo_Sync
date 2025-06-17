@@ -489,7 +489,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <CustomerQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -501,7 +501,7 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <CustomerQueryRq requestID="{request_id_str}">
       <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -514,7 +514,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -526,7 +526,7 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}">
       <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -581,7 +581,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <BillQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned> 
+      <MaxReturned>20</MaxReturned> 
     </BillQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -594,7 +594,7 @@ class QBWCService(ServiceBase):
     <BillQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       {include_line_items_xml}
-      <MaxReturned>50</MaxReturned> 
+      <MaxReturned>20</MaxReturned> 
     </BillQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -614,7 +614,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <ReceivePaymentQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </ReceivePaymentQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -627,7 +627,7 @@ class QBWCService(ServiceBase):
     <ReceivePaymentQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       <IncludeLineItems>true</IncludeLineItems> <!-- To see which invoices are paid -->
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </ReceivePaymentQueryRq>
   </QBXML>
 </QBXML>'''
@@ -643,7 +643,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <CreditMemoQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </CreditMemoQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -656,7 +656,7 @@ class QBWCService(ServiceBase):
     <CreditMemoQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       {include_line_items_xml}
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </CreditMemoQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -671,7 +671,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <SalesOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </SalesOrderQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -684,7 +684,7 @@ class QBWCService(ServiceBase):
     <SalesOrderQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       {include_line_items_xml}
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </SalesOrderQueryRq>
   </QBXML>
 </QBXML>'''
@@ -699,7 +699,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <PurchaseOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </PurchaseOrderQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -712,7 +712,7 @@ class QBWCService(ServiceBase):
     <PurchaseOrderQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       {include_line_items_xml}
-      <MaxReturned>50</MaxReturned>
+      <MaxReturned>20</MaxReturned>
     </PurchaseOrderQueryRq>
   </QBXML>
 </QBXML>'''
