@@ -1094,10 +1094,12 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
     existing_invoice_id = None
     if qb_invoice_data.get("qb_txn_id"):
         logger.info(f"Searching for existing Odoo invoice with x_qb_txn_id: {qb_invoice_data.get('qb_txn_id')}")
+        # Fix: domain must be a list of lists, not multiple lists
+        domain = [["x_qb_txn_id", "=", qb_invoice_data.get("qb_txn_id")], ["move_type", "=", "out_invoice"]]
         existing_invoices = _odoo_rpc_call(
             model="account.move",
             method="search_read",
-            args_list=[["x_qb_txn_id", "=", qb_invoice_data.get("qb_txn_id")], ["move_type", "=", "out_invoice"]],
+            args_list=[domain],
             kwargs_dict={"fields": ["id"], "limit": 1}
         )
         if existing_invoices:
@@ -1403,8 +1405,9 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
         logger.info("Attempting to create new Odoo credit memo.")
         logger.debug(f"Odoo Credit Memo Create Payload: {odoo_credit_memo_payload}")
 
+
+
         # Check if there are any lines, as Odoo might require lines for a credit memo
-       
         if not credit_memo_lines_for_odoo and qb_credit_memo_data.get("lines"): # If QB had lines but we processed none
             logger.error(f"No processable lines for new QB Credit Memo Ref {qb_credit_memo_data.get('ref_number')}. Creation aborted.")
             return None
