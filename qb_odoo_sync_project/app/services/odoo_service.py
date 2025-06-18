@@ -127,6 +127,32 @@ def find_partner_by_ref(ref: str, company_id: Optional[int] = None) -> Optional[
         return partners[0]
     return None
 
+def find_partner_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Finds a partner by their name (tries both 'FirstName LastName' and 'LastName, FirstName' formats)."""
+    if not name or not name.strip():
+        return None
+    name = name.strip()
+    possible_names = [name]
+    if ',' in name:
+        last, first = [part.strip() for part in name.split(',', 1)]
+        possible_names.append(f"{first} {last}")
+    elif ' ' in name:
+        parts = name.split()
+        if len(parts) >= 2:
+            first = parts[0]
+            last = ' '.join(parts[1:])
+            possible_names.append(f"{last}, {first}")
+    for test_name in possible_names:
+        partners = _odoo_rpc_call(
+            "res.partner",
+            "search_read",
+            args_list=[[['name', '=', test_name]]],
+            kwargs_dict={"fields": ["id", "name", "ref"], "limit": 1}
+        )
+        if partners:
+            return partners[0]
+    return None
+
 def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     """
     Ensure a partner exists in Odoo, creating if necessary.
@@ -355,7 +381,7 @@ def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any], is_supplier:
     """
     Creates or updates a partner in Odoo from QuickBooks customer data.
     Uses field_mapping.json for mapping QB fields to Odoo fields.
-    Handles creation of new partners and updates to existing ones based on QB ListID (ref in Odoo).
+    Handles creation of new partners and updates to existing ones based on partner name (not ListID).
     If ParentRef_ListID is present in qb_customer_data, it's a job and will be skipped.
     Args:
         qb_customer_data: Dictionary containing data from QB CustomerRet or VendorRet.
@@ -385,20 +411,20 @@ def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any], is_supplier:
         return None
 
     odoo_partner_id = None
-    existing_partner_data = find_partner_by_ref(qb_list_id)
+    existing_partner_data = find_partner_by_name(qb_customer_data.get("Name"))
 
     if existing_partner_data:
         odoo_partner_id = existing_partner_data["id"]
-        logger.info(f"Found existing Odoo partner ID: {odoo_partner_id} for QB ListID: {qb_list_id}")
+        logger.info(f"Found existing Odoo partner ID: {odoo_partner_id} for Name: {qb_customer_data.get('Name')}")
     else:
-        logger.info(f"No existing Odoo partner found for QB ListID: {qb_list_id}. Will attempt to create.")
+        logger.info(f"No existing Odoo partner found for Name: {qb_customer_data.get('Name')}. Will attempt to create.")
 
     odoo_payload = {}
     
     # 1. Handle Name and Company Type (is_company, type)
     raw_name = qb_customer_data.get("Name")
     if not raw_name or not raw_name.strip():
-        logger.error(f"QB Customer data for ListID {qb_list_id} is missing 'Name' or 'Name' is empty. Cannot process partner.")
+        logger.error(f"QB Customer data for ListID {qb_customer_data.get('ListID')} is missing 'Name' or 'Name' is empty. Cannot process partner.")
         return None
     
     # Determine initial is_company status
