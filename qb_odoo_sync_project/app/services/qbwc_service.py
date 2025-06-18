@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional
 import json
+from xml.sax.saxutils import escape
 
 # Remove import of MAX_JOURNAL_ENTRIES_PER_REQUEST from config
 MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
@@ -186,6 +187,22 @@ def _extract_text(xml_element: ET.Element, xpath: str) -> str:
         return result.strip() if result else ""
     except Exception as e:
         logger.warning(f"Error extracting text for xpath '{xpath}': {e}")
+        return ""
+
+def _get_customer_filter_xml(self):
+        """Builds XML for customer name filter based on config."""
+        customer_name_filter = self.config.get("CUSTOMER_NAME_FILTER")
+        if customer_name_filter:
+            logging.info(f"Filtering customers with name starting with: {customer_name_filter}")
+            return f"<NameFilter><MatchCriterion>StartsWith</MatchCriterion><Name>{escape(customer_name_filter)}</Name></NameFilter>"
+        return ""
+
+def _get_vendor_filter_xml(self):
+        """Builds XML for vendor name filter based on config."""
+        vendor_name_filter = self.config.get("VENDOR_NAME_FILTER")
+        if vendor_name_filter:
+            logging.info(f"Filtering vendors with name starting with: {vendor_name_filter}")
+            return f"<NameFilter><MatchCriterion>StartsWith</MatchCriterion><Name>{escape(vendor_name_filter)}</Name></NameFilter>"
         return ""
 
 def _get_txn_date_filter_xml(params: Dict[str, Any]) -> str:
@@ -570,12 +587,11 @@ class QBWCService(ServiceBase):
 
             elif entity == INVOICE_QUERY:
                 params = current_task.get("params", {})
-                # Remove date filter XML generation
-                modified_date_filter_xml = ""
-                txn_date_filter_xml = ""
+                
+                # Ensure we fetch all invoices by setting a wide date range
+                modified_date_filter_xml = '<ModifiedDateRangeFilter><FromModifiedDate>1980-01-01</FromModifiedDate></ModifiedDateRangeFilter>'
 
                 include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
-                owner_id_xml = f'''<OwnerID>{params["OwnerID"]}</OwnerID>''' if "OwnerID" in params else ""
 
                 if iterator_id:
                     logger.info(f"Continuing InvoiceQueryRq with iteratorID: {iterator_id}")
@@ -589,14 +605,14 @@ class QBWCService(ServiceBase):
   </QBXMLMsgsRq>
 </QBXML>'''
                 else:
-                    logger.info("Starting new InvoiceQueryRq without date filters.")
+                    logger.info("Starting new InvoiceQueryRq with a wide date filter.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
 <?qbxml version="{session_data["qbxml_version"]}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <InvoiceQueryRq requestID="{request_id_str}">
-      {_get_include_line_items_xml(params)}
-      {f'<OwnerID>{params["OwnerID"]}</OwnerID>' if "OwnerID" in params else ""}
+      {modified_date_filter_xml}
+      {include_line_items_xml}
       <MaxReturned>10</MaxReturned> 
     </InvoiceQueryRq>
   </QBXMLMsgsRq>
