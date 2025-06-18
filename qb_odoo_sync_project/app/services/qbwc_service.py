@@ -414,6 +414,105 @@ class QBWCService(ServiceBase):
                     "params": {
                         "IncludeLineItems": "true"
                     }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "SalesReceiptQuery",
+                    "requestID": "3",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "BillQuery",
+                    "requestID": "4",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "CheckQuery",
+                    "requestID": "5",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "JournalEntryQuery",
+                    "requestID": "6",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "PurchaseOrderQuery",
+                    "requestID": "7",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "SalesOrderQuery",
+                    "requestID": "8",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "CreditMemoQuery",
+                    "requestID": "9",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "EstimateQuery",
+                    "requestID": "10",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "DepositQuery",
+                    "requestID": "11",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "ReceivePaymentQuery",
+                    "requestID": "12",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": "BillPaymentCheckQuery",
+                    "requestID": "13",
+                    "iteratorID": None,
+                    "params": {
+                        "IncludeLineItems": "true"
+                    }
                 }
             ]
 
