@@ -65,15 +65,7 @@ def get_odoo_uid_cached() -> Optional[int]:
 def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict: Dict = None) -> Optional[Any]:
     """
     Make a standardized XML-RPC call to Odoo using 'execute_kw'.
-
-    Args:
-        model: Odoo model name (e.g., 'res.partner')
-        method: Method to call (e.g., 'search_read', 'create', 'write')
-        args_list: Positional arguments for the Odoo method (e.g., [[domain_list]] for search, [[id], {values}] for write)
-        kwargs_dict: Keyword arguments for the Odoo method (e.g., {'fields': [...], 'limit': ...} for search_read)
-    
-    Returns:
-        Result from Odoo API or None on error
+    Ensures positional arguments are always a list and keyword arguments are always a dict.
     """
     uid = get_odoo_uid_cached()
     if not uid:
@@ -82,21 +74,21 @@ def _odoo_rpc_call(model: str, method: str, args_list: List = None, kwargs_dict:
 
     try:
         models_proxy = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object', allow_none=True)
-        
         params_for_execute_kw = [ODOO_DB, uid, ODOO_API_KEY, model, method]
-        
-        if args_list is not None:
-            params_for_execute_kw.append(args_list)
-        else:
-            params_for_execute_kw.append([]) # Must provide an empty list if no positional args
-        
+        # Ensure positional args is always a list
+        if args_list is None:
+            args_list = []
+        elif isinstance(args_list, tuple):
+            args_list = list(args_list)
+        params_for_execute_kw.append(args_list)
+        # Only add kwargs if present and is a dict
         if kwargs_dict is not None:
+            if not isinstance(kwargs_dict, dict):
+                logger.error(f"Odoo RPC call: kwargs_dict must be a dict, got {type(kwargs_dict)}. Forcing to empty dict.")
+                kwargs_dict = {}
             params_for_execute_kw.append(kwargs_dict)
-
         logger.debug(f"Odoo XML-RPC call: model='{model}', method='{method}', args='{args_list}', kwargs='{kwargs_dict}'")
-        
         result = models_proxy.execute_kw(*params_for_execute_kw)
-        
         logger.debug(f"Odoo RPC call to {model}.{method} successful. Result snippet: {str(result)[:200]}...")
         return result
     except xmlrpc.client.Fault as e:
@@ -1412,6 +1404,7 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
         logger.debug(f"Odoo Credit Memo Create Payload: {odoo_credit_memo_payload}")
 
         # Check if there are any lines, as Odoo might require lines for a credit memo
+       
         if not credit_memo_lines_for_odoo and qb_credit_memo_data.get("lines"): # If QB had lines but we processed none
             logger.error(f"No processable lines for new QB Credit Memo Ref {qb_credit_memo_data.get('ref_number')}. Creation aborted.")
             return None
