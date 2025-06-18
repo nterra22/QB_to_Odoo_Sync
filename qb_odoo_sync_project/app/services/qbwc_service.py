@@ -486,7 +486,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <CustomerQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>50</MaxReturned>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -498,7 +498,7 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <CustomerQueryRq requestID="{request_id_str}">
       <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>50</MaxReturned>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -511,7 +511,7 @@ class QBWCService(ServiceBase):
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>50</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
@@ -523,7 +523,7 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}">
       <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
-      <MaxReturned>100</MaxReturned>
+      <MaxReturned>50</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
