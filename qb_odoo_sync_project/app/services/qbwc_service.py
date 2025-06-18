@@ -1582,14 +1582,20 @@ def _compute_overall_progress(session_data):
 
     @rpc(_returns=Unicode)
     def serverVersion(self):
-        """Return server version information."""
+        """Return server version information as a string per QBWC WSDL schema.
+        Return an empty string if no message is needed, or a version string for display/logging.
+        """
         logger.debug("Method serverVersion called")
-        return "1.0.0"
-    
-    @rpc(Unicode, _returns=Unicode)  
+        # Example: return version string or empty string
+        return "1.0.0"  # Or return "" if you want no message
+
+    @rpc(Unicode, _returns=Unicode)
     def clientVersion(self, strVersion):
-        """Handle client version information."""
+        """Return a string per QBWC WSDL schema.
+        Return empty string if version is supported.
+        Return 'W:message' for warnings, or 'E:message' to block connection.
+        """
         logger.debug("Method clientVersion called")
         logger.info(f"QBWC Service: clientVersion called with version: {strVersion}")
-        # Return empty string to indicate version is supported
-        return ""
+        # Example logic: always allow
+        return ""  # Or return 'W:This is a warning' or 'E:This is an error' as needed
