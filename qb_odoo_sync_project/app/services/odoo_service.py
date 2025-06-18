@@ -1432,3 +1432,28 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
         else:
             logger.error(f"Failed to create Odoo credit memo for QB Ref: {qb_credit_memo_data.get('ref_number')}")
             return None
+
+def create_or_update_odoo_sales_receipt(qb_sales_receipt_data: dict) -> int:
+    """Stub: Create or update a SalesReceipt in Odoo from QuickBooks data."""
+    # Implement Odoo logic here
+    return 1
+
+def create_or_update_odoo_check(qb_check_data: dict) -> int:
+    """Stub: Create or update a Check in Odoo from QuickBooks data."""
+    # Implement Odoo logic here
+    return 1
+
+def create_or_update_odoo_deposit(qb_deposit_data: dict) -> int:
+    """Stub: Create or update a Deposit in Odoo from QuickBooks data."""
+    # Implement Odoo logic here
+    return 1
+
+def create_or_update_odoo_estimate(qb_estimate_data: dict) -> int:
+    """Stub: Create or update an Estimate in Odoo from QuickBooks data."""
+    # Implement Odoo logic here
+    return 1
+
+def create_or_update_odoo_bill_payment_check(qb_bill_payment_data: dict) -> int:
+    """Stub: Create or update a BillPaymentCheck in Odoo from QuickBooks data."""
+    # Implement Odoo logic here
+    return 1

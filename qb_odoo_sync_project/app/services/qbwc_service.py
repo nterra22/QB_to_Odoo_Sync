@@ -45,7 +45,12 @@ from .odoo_service import (
     create_or_update_odoo_credit_memo, # New
     create_or_update_odoo_sales_order, # New
     create_or_update_odoo_purchase_order, # New
-    create_or_update_odoo_journal_entry # New
+    create_or_update_odoo_journal_entry, # New
+    create_or_update_odoo_sales_receipt, # New
+    create_or_update_odoo_check, # New
+    create_or_update_odoo_deposit, # New
+    create_or_update_odoo_estimate, # New
+    create_or_update_odoo_bill_payment_check # New
 )
 # from ..utils.data_loader import is_record_changed, update_sync_cache # Import cache functions
 
@@ -1274,6 +1279,207 @@ class QBWCService(ServiceBase):
                             session_data["current_task_index"] += 1
                     else:
                         logger.warning("Could not find JournalEntryQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+
+                elif entity == "SalesReceiptQuery":
+                    sales_receipt_query_rs = root.find('.//SalesReceiptQueryRs')
+                    if sales_receipt_query_rs is not None:
+                        status_code = sales_receipt_query_rs.get('statusCode', 'unknown')
+                        status_message = sales_receipt_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"SalesReceiptQueryRs status: {status_code} - {status_message}")
+                        if status_code == '0':
+                            sales_receipts = sales_receipt_query_rs.findall('.//SalesReceiptRet')
+                            logger.info(f"Received {len(sales_receipts)} sales receipts in this response.")
+                            for sr_xml in sales_receipts:
+                                qb_sr_data = _extract_transaction_data(sr_xml, "SalesReceipt")
+                                if not qb_sr_data.get("qb_txn_id"):
+                                    logger.warning("SalesReceipt record found with no TxnID. Skipping.")
+                                    continue
+                                logger.info(f"  Processing SalesReceipt TxnID: {qb_sr_data.get('qb_txn_id')}, Ref: {qb_sr_data.get('ref_number')}")
+                                try:
+                                    odoo_sr_id = create_or_update_odoo_sales_receipt(qb_sr_data)
+                                    if odoo_sr_id:
+                                        logger.info(f"    Successfully processed SalesReceipt {qb_sr_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_sr_id}).")
+                                    else:
+                                        logger.warning(f"    SalesReceipt {qb_sr_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing SalesReceipt {qb_sr_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            iterator_id = sales_receipt_query_rs.get("iteratorID")
+                            iterator_remaining_count = sales_receipt_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                        else:
+                            logger.error(f"SalesReceiptQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                    else:
+                        logger.warning("Could not find SalesReceiptQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                elif entity == "CheckQuery":
+                    check_query_rs = root.find('.//CheckQueryRs')
+                    if check_query_rs is not None:
+                        status_code = check_query_rs.get('statusCode', 'unknown')
+                        status_message = check_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"CheckQueryRs status: {status_code} - {status_message}")
+                        if status_code == '0':
+                            checks = check_query_rs.findall('.//CheckRet')
+                            logger.info(f"Received {len(checks)} checks in this response.")
+                            for check_xml in checks:
+                                qb_check_data = _extract_transaction_data(check_xml, "Check")
+                                if not qb_check_data.get("qb_txn_id"):
+                                    logger.warning("Check record found with no TxnID. Skipping.")
+                                    continue
+                                logger.info(f"  Processing Check TxnID: {qb_check_data.get('qb_txn_id')}, Ref: {qb_check_data.get('ref_number')}")
+                                try:
+                                    odoo_check_id = create_or_update_odoo_check(qb_check_data)
+                                    if odoo_check_id:
+                                        logger.info(f"    Successfully processed Check {qb_check_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_check_id}).")
+                                    else:
+                                        logger.warning(f"    Check {qb_check_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Check {qb_check_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            iterator_id = check_query_rs.get("iteratorID")
+                            iterator_remaining_count = check_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                        else:
+                            logger.error(f"CheckQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                    else:
+                        logger.warning("Could not find CheckQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                elif entity == "DepositQuery":
+                    deposit_query_rs = root.find('.//DepositQueryRs')
+                    if deposit_query_rs is not None:
+                        status_code = deposit_query_rs.get('statusCode', 'unknown')
+                        status_message = deposit_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"DepositQueryRs status: {status_code} - {status_message}")
+                        if status_code == '0':
+                            deposits = deposit_query_rs.findall('.//DepositRet')
+                            logger.info(f"Received {len(deposits)} deposits in this response.")
+                            for deposit_xml in deposits:
+                                qb_deposit_data = _extract_transaction_data(deposit_xml, "Deposit")
+                                if not qb_deposit_data.get("qb_txn_id"):
+                                    logger.warning("Deposit record found with no TxnID. Skipping.")
+                                    continue
+                                logger.info(f"  Processing Deposit TxnID: {qb_deposit_data.get('qb_txn_id')}, Ref: {qb_deposit_data.get('ref_number')}")
+                                try:
+                                    odoo_deposit_id = create_or_update_odoo_deposit(qb_deposit_data)
+                                    if odoo_deposit_id:
+                                        logger.info(f"    Successfully processed Deposit {qb_deposit_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_deposit_id}).")
+                                    else:
+                                        logger.warning(f"    Deposit {qb_deposit_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Deposit {qb_deposit_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            iterator_id = deposit_query_rs.get("iteratorID")
+                            iterator_remaining_count = deposit_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                        else:
+                            logger.error(f"DepositQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                    else:
+                        logger.warning("Could not find DepositQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                elif entity == "EstimateQuery":
+                    estimate_query_rs = root.find('.//EstimateQueryRs')
+                    if estimate_query_rs is not None:
+                        status_code = estimate_query_rs.get('statusCode', 'unknown')
+                        status_message = estimate_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"EstimateQueryRs status: {status_code} - {status_message}")
+                        if status_code == '0':
+                            estimates = estimate_query_rs.findall('.//EstimateRet')
+                            logger.info(f"Received {len(estimates)} estimates in this response.")
+                            for estimate_xml in estimates:
+                                qb_estimate_data = _extract_transaction_data(estimate_xml, "Estimate")
+                                if not qb_estimate_data.get("qb_txn_id"):
+                                    logger.warning("Estimate record found with no TxnID. Skipping.")
+                                    continue
+                                logger.info(f"  Processing Estimate TxnID: {qb_estimate_data.get('qb_txn_id')}, Ref: {qb_estimate_data.get('ref_number')}")
+                                try:
+                                    odoo_estimate_id = create_or_update_odoo_estimate(qb_estimate_data)
+                                    if odoo_estimate_id:
+                                        logger.info(f"    Successfully processed Estimate {qb_estimate_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_estimate_id}).")
+                                    else:
+                                        logger.warning(f"    Estimate {qb_estimate_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing Estimate {qb_estimate_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            iterator_id = estimate_query_rs.get("iteratorID")
+                            iterator_remaining_count = estimate_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                        else:
+                            logger.error(f"EstimateQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                    else:
+                        logger.warning("Could not find EstimateQueryRs in response.")
+                        active_task["iteratorID"] = None
+                        session_data["current_task_index"] += 1
+                elif entity == "BillPaymentCheckQuery":
+                    bill_payment_query_rs = root.find('.//BillPaymentCheckQueryRs')
+                    if bill_payment_query_rs is not None:
+                        status_code = bill_payment_query_rs.get('statusCode', 'unknown')
+                        status_message = bill_payment_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"BillPaymentCheckQueryRs status: {status_code} - {status_message}")
+                        if status_code == '0':
+                            bill_payments = bill_payment_query_rs.findall('.//BillPaymentCheckRet')
+                            logger.info(f"Received {len(bill_payments)} bill payments in this response.")
+                            for bp_xml in bill_payments:
+                                qb_bp_data = _extract_transaction_data(bp_xml, "BillPaymentCheck")
+                                if not qb_bp_data.get("qb_txn_id"):
+                                    logger.warning("BillPaymentCheck record found with no TxnID. Skipping.")
+                                    continue
+                                logger.info(f"  Processing BillPaymentCheck TxnID: {qb_bp_data.get('qb_txn_id')}, Ref: {qb_bp_data.get('ref_number')}")
+                                try:
+                                    odoo_bp_id = create_or_update_odoo_bill_payment_check(qb_bp_data)
+                                    if odoo_bp_id:
+                                        logger.info(f"    Successfully processed BillPaymentCheck {qb_bp_data.get('qb_txn_id')} for Odoo (Odoo ID: {odoo_bp_id}).")
+                                    else:
+                                        logger.warning(f"    BillPaymentCheck {qb_bp_data.get('qb_txn_id')} processed for Odoo but no Odoo ID returned.")
+                                except Exception as e:
+                                    logger.error(f"    Error processing BillPaymentCheck {qb_bp_data.get('qb_txn_id')} for Odoo: {e}", exc_info=True)
+                            iterator_id = bill_payment_query_rs.get("iteratorID")
+                            iterator_remaining_count = bill_payment_query_rs.get("iteratorRemainingCount")
+                            if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                active_task["iteratorID"] = iterator_id
+                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                progress = 50
+                            else:
+                                active_task["iteratorID"] = None
+                                session_data["current_task_index"] += 1
+                        else:
+                            logger.error(f"BillPaymentCheckQueryRs failed: {status_message}")
+                            active_task["iteratorID"] = None
+                            session_data["current_task_index"] += 1
+                    else:
+                        logger.warning("Could not find BillPaymentCheckQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
 
