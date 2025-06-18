@@ -554,13 +554,22 @@ class QBWCService(ServiceBase):
                 iterator_id = current_task.get("iteratorID")
                 qbxml_version = session_data.get("qbxml_version", "13.0")
                 request_id_str = current_task.get("requestID", "1")
-                # Only pass the expected arguments to the helper
-                xml_request = build_invoice_query_xml(
-                    params,
-                    qbxml_version,
-                    request_id_str,
-                    iterator_id
-                )
+                
+                logger.info(f"Building InvoiceQuery XML with params: {params}, qbxml_version: {qbxml_version}, request_id: {request_id_str}, iterator_id: {iterator_id}")
+                
+                try:
+                    # Only pass the expected arguments to the helper
+                    xml_request = build_invoice_query_xml(
+                        params,
+                        qbxml_version,
+                        request_id_str,
+                        iterator_id
+                    )
+                    logger.info(f"Successfully built InvoiceQuery XML. Length: {len(xml_request)} characters")
+                    logger.debug(f"Generated InvoiceQuery XML: {xml_request}")
+                except Exception as e:
+                    logger.error(f"Error building InvoiceQuery XML: {e}", exc_info=True)
+                    return ""
             elif entity == BILL_QUERY:
                 params = current_task.get("params", {})
                 iterator_id = current_task.get("iteratorID")
@@ -699,8 +708,18 @@ class QBWCService(ServiceBase):
                 save_qbwc_session_state()
                 return str(progress)
 
-            root = ET.fromstring(response)
-            
+            logger.debug(f"Parsing XML response for entity: {active_task.get('entity', 'Unknown')}")
+            try:
+                root = ET.fromstring(response)
+                logger.debug("XML response parsed successfully")
+            except ET.ParseError as parse_error:
+                logger.error(f"XML Parse Error in receiveResponseXML: {parse_error}")
+                logger.error(f"Response content (first 1000 chars): {response[:1000]}")
+                session_data["last_error"] = f"XML Parse Error: {str(parse_error)}"
+                session_data["current_task_index"] += 1
+                save_qbwc_session_state()
+                return "0"
+
             if active_task["type"] == QB_QUERY:
                 entity = active_task["entity"]
                 
@@ -823,62 +842,74 @@ class QBWCService(ServiceBase):
                         session_data["current_task_index"] += 1
 
                 elif entity == INVOICE_QUERY:
-                    invoice_query_rs = root.find('.//InvoiceQueryRs')
-                    if invoice_query_rs is not None:
-                        status_code = invoice_query_rs.get('statusCode', 'unknown')
-                        status_message = invoice_query_rs.get('statusMessage', 'N/A')
-                        logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
+                    try:
+                        logger.info("Processing InvoiceQuery response...")
+                        invoice_query_rs = root.find('.//InvoiceQueryRs')
+                        if invoice_query_rs is not None:
+                            status_code = invoice_query_rs.get('statusCode', 'unknown')
+                            status_message = invoice_query_rs.get('statusMessage', 'N/A')
+                            logger.info(f"InvoiceQueryRs status: {status_code} - {status_message}")
 
-                        if status_code == '0':
-                            invoices = invoice_query_rs.findall('.//InvoiceRet')
-                            logger.info(f"Received {len(invoices)} invoices in this response.")
-                            for inv_xml in invoices:
-                                qb_invoice_data = _extract_transaction_data(inv_xml, "Invoice")
+                            if status_code == '0':
+                                invoices = invoice_query_rs.findall('.//InvoiceRet')
+                                logger.info(f"Received {len(invoices)} invoices in this response.")
                                 
-                                if not qb_invoice_data.get("qb_txn_id"):
-                                    logger.warning("Invoice record found with no TxnID. Skipping.")
-                                    continue
+                                for inv_xml in invoices:
+                                    try:
+                                        qb_invoice_data = _extract_transaction_data(inv_xml, "Invoice")
+                                        
+                                        if not qb_invoice_data.get("qb_txn_id"):
+                                            logger.warning("Invoice record found with no TxnID. Skipping.")
+                                            continue
 
-                                original_qb_customer_name = _get_xml_text(inv_xml.find('CustomerRef/FullName'))
-                                if original_qb_customer_name and ':' in original_qb_customer_name:
-                                    parent_customer_name_from_job_string = original_qb_customer_name.split(':')[0].strip()
-                                    logger.info(f"Invoice {qb_invoice_data['qb_txn_id']} is for job '{original_qb_customer_name}'. Attempting to assign to parent customer '{parent_customer_name_from_job_string}'.")
-                                    qb_invoice_data["customer_name"] = parent_customer_name_from_job_string
+                                        original_qb_customer_name = _get_xml_text(inv_xml.find('CustomerRef/FullName'))
+                                        if original_qb_customer_name and ':' in original_qb_customer_name:
+                                            parent_customer_name_from_job_string = original_qb_customer_name.split(':')[0].strip()
+                                            logger.info(f"Invoice {qb_invoice_data['qb_txn_id']} is for job '{original_qb_customer_name}'. Attempting to assign to parent customer '{parent_customer_name_from_job_string}'.")
+                                            qb_invoice_data["customer_name"] = parent_customer_name_from_job_string
+                                        
+                                        logger.info(f"  Processing Invoice TxnID: {qb_invoice_data['qb_txn_id']}, Ref: {qb_invoice_data.get('ref_number')}")
+
+                                        if not qb_invoice_data.get("customer_name"):
+                                            logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} has no customer name. Skipping Odoo processing for this invoice.")
+                                            continue
+                                        
+                                        try:
+                                            odoo_invoice_id = create_or_update_odoo_invoice(qb_invoice_data)
+                                            if odoo_invoice_id:
+                                                logger.info(f"    Successfully processed Invoice {qb_invoice_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_invoice_id}).")
+                                            else:
+                                                logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} processed for Odoo but no Odoo ID returned (may indicate create/update issue or placeholder).")
+                                        except Exception as e:
+                                            logger.error(f"    Error processing Invoice {qb_invoice_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
+                                    except Exception as e:
+                                        logger.error(f"    Error extracting data from invoice XML: {e}", exc_info=True)
+                                        continue
+
+                                iterator_id = invoice_query_rs.get("iteratorID")
+                                iterator_remaining_count = invoice_query_rs.get("iteratorRemainingCount")
                                 
-                                logger.info(f"  Processing Invoice TxnID: {qb_invoice_data['qb_txn_id']}, Ref: {qb_invoice_data.get('ref_number')}")
-
-                                if not qb_invoice_data.get("customer_name"):
-                                    logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} has no customer name. Skipping Odoo processing for this invoice.")
-                                    continue
-                                
-                                try:
-                                    odoo_invoice_id = create_or_update_odoo_invoice(qb_invoice_data)
-                                    if odoo_invoice_id:
-                                        logger.info(f"    Successfully processed Invoice {qb_invoice_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_invoice_id}).")
-                                    else:
-                                        logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} processed for Odoo but no Odoo ID returned (may indicate create/update issue or placeholder).")
-                                except Exception as e:
-                                    logger.error(f"    Error processing Invoice {qb_invoice_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
-
-                            iterator_id = invoice_query_rs.get("iteratorID")
-                            iterator_remaining_count = invoice_query_rs.get("iteratorRemainingCount")
-                            
-                            if iterator_id and int(iterator_remaining_count or '0') > 0:
-                                active_task["iteratorID"] = iterator_id
-                                active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
-                                progress = 50 
-                                logger.info(f"Invoice iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
+                                if iterator_id and int(iterator_remaining_count or '0') > 0:
+                                    active_task["iteratorID"] = iterator_id
+                                    active_task["requestID"] = str(int(active_task.get("requestID", "0")) + 1)
+                                    progress = 50 
+                                    logger.info(f"Invoice iteration continues. IteratorID: {iterator_id}, Remaining: {iterator_remaining_count}")
+                                else:
+                                    logger.info("Invoice iteration complete or no iterator.")
+                                    active_task["iteratorID"] = None
+                                    session_data["current_task_index"] += 1
                             else:
-                                logger.info("Invoice iteration complete or no iterator.")
+                                logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
+                                session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
                         else:
-                            logger.error(f"InvoiceQueryRs failed with statusCode: {status_code}, message: {status_message}")
-                            session_data["last_error"] = f"InvoiceQuery Error: {status_message}"
+                            logger.warning("Could not find InvoiceQueryRs in the response.")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                    else:
-                        logger.warning("Could not find InvoiceQueryRs in the response.")
+                    except Exception as e:
+                        logger.error(f"Error processing InvoiceQuery response: {e}", exc_info=True)
+                        session_data["last_error"] = f"InvoiceQuery Processing Error: {str(e)}"
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
                 elif entity == BILL_QUERY:

@@ -451,8 +451,8 @@ def create_or_update_odoo_partner(qb_customer_data: Dict[str, Any], is_supplier:
             continue
 
         # Skip complex relational fields that require creating other records (e.g., child_ids.street for shipping addresses)
-        if "." in odoo_field: 
-            logger.warning(f"Skipping complex field mapping for '{odoo_field}' from QB field '{qb_field}'. Value: '{qb_value}'. This may require specific logic for related models (e.g., child contacts).")
+        # SIMPLIFIED: Do not warn or log about child_ids or complex fields, just skip them silently
+        if "." in odoo_field:
             continue
 
         # Special handling for relational fields requiring ID lookups
