@@ -433,7 +433,7 @@ class QBWCService(ServiceBase):
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
-                        "IncludeLineItems": "true" # No date filter, fetch all
+                        "IncludeLineItems": "true"
                     }
                 }
             ]
