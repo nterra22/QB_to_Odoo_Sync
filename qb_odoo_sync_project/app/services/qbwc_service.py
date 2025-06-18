@@ -7,10 +7,10 @@ via the QuickBooks Web Connector application.
 from spyne import rpc, ServiceBase, Unicode, Iterable
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 import logging
 from typing import Dict, Any, Optional
 import json
-from xml.sax.saxutils import escape
 
 # Remove import of MAX_JOURNAL_ENTRIES_PER_REQUEST from config
 MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
@@ -353,6 +353,27 @@ def _extract_payment_data(payment_xml_element: ET.Element) -> Dict[str, Any]:
         
     return data
 
+# Helper to build QBXML using ElementTree for InvoiceQueryRq
+
+def build_invoice_query_xml(request_id, qbxml_version, iterator_id=None, max_returned=10, from_date="1980-01-01", to_date=None, include_line_items=True):
+    import xml.etree.ElementTree as ET
+    qbxml = ET.Element("QBXML")
+    msgs = ET.SubElement(qbxml, "QBXMLMsgsRq", onError="stopOnError")
+    if iterator_id:
+        invoice_query = ET.SubElement(msgs, "InvoiceQueryRq", requestID=str(request_id), iterator="Continue", iteratorID=iterator_id)
+        ET.SubElement(invoice_query, "MaxReturned").text = str(max_returned)
+    else:
+        invoice_query = ET.SubElement(msgs, "InvoiceQueryRq", requestID=str(request_id))
+        mod_filter = ET.SubElement(invoice_query, "ModifiedDateRangeFilter")
+        ET.SubElement(mod_filter, "FromModifiedDate").text = from_date
+        if to_date:
+            ET.SubElement(mod_filter, "ToModifiedDate").text = to_date
+        if include_line_items:
+            ET.SubElement(invoice_query, "IncludeLineItems").text = "true"
+        ET.SubElement(invoice_query, "MaxReturned").text = str(max_returned)
+    xml_str = ET.tostring(qbxml, encoding="utf-8").decode("utf-8")
+    return f'<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n' + xml_str
+
 class QBWCService(ServiceBase):
     """QuickBooks Web Connector SOAP service implementation."""
 
@@ -587,36 +608,15 @@ class QBWCService(ServiceBase):
 
             elif entity == INVOICE_QUERY:
                 params = current_task.get("params", {})
-                
-                # Ensure we fetch all invoices by setting a wide date range
-                modified_date_filter_xml = '<ModifiedDateRangeFilter><FromModifiedDate>1980-01-01</FromModifiedDate></ModifiedDateRangeFilter>'
-
-                include_line_items_xml = f'''<IncludeLineItems>{params["IncludeLineItems"]}</IncludeLineItems>''' if "IncludeLineItems" in params else ""
-
-                if iterator_id:
-                    logger.info(f"Continuing InvoiceQueryRq with iteratorID: {iterator_id}")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <InvoiceQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>10</MaxReturned> 
-    </InvoiceQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
-                else:
-                    logger.info("Starting new InvoiceQueryRq with a wide date filter.")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <InvoiceQueryRq requestID="{request_id_str}">
-      {modified_date_filter_xml}
-      {include_line_items_xml}
-      <MaxReturned>10</MaxReturned> 
-    </InvoiceQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
+                from_date = "1980-01-01"
+                to_date = None
+                if "ModifiedDateRangeFilter" in params:
+                    from_date = params["ModifiedDateRangeFilter"].get("FromModifiedDate", from_date)
+                    to_date = params["ModifiedDateRangeFilter"].get("ToModifiedDate", to_date)
+                xml_request = build_invoice_query_xml(request_id_str, qbxml_version, iterator_id, 10, from_date, to_date, include_line_items=True)
             elif entity == BILL_QUERY:
                 params = current_task.get("params", {})
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
@@ -649,30 +649,15 @@ class QBWCService(ServiceBase):
             elif entity == RECEIVEPAYMENT_QUERY:
                 params = current_task.get("params", {})
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
-                
+                iterator_id = current_task.get("iteratorID")
+                request_id_str = current_task.get("requestID", "1")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
                 if iterator_id:
                     logger.info(f"Continuing ReceivePaymentQueryRq with iteratorID: {iterator_id}")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <ReceivePaymentQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
-    </ReceivePaymentQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <ReceivePaymentQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>50</MaxReturned>\n    </ReceivePaymentQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
                     logger.info(f"Starting new ReceivePaymentQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <ReceivePaymentQueryRq requestID="{request_id_str}">
-      {txn_date_filter_xml}
-      <MaxReturned>50</MaxReturned>
-    </ReceivePaymentQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <ReceivePaymentQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>50</MaxReturned>\n    </ReceivePaymentQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
 
             elif entity == CREDITMEMO_QUERY: # New
                 params = current_task.get("params", {})
@@ -786,7 +771,7 @@ class QBWCService(ServiceBase):
       {include_line_items_xml}
       <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> 
     </JournalEntryQueryRq>
-  </QBXML>
+  </QBXMLMsgsRq>
 </QBXML>'''
 
         # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
@@ -1074,27 +1059,6 @@ class QBWCService(ServiceBase):
 
                         if status_code == '0':
                             payments = payment_query_rs.findall('.//ReceivePaymentRet')
-                            logger.info(f"Received {len(payments)} payments in this response.")
-                            for payment_xml in payments:
-                                qb_payment_data = _extract_payment_data(payment_xml)
-
-                                if not qb_payment_data.get("qb_txn_id"):
-                                    logger.warning("Payment record found with no TxnID. Skipping.")
-                                    continue
-                                
-                                logger.info(f"  Processing Payment TxnID: {qb_payment_data['qb_txn_id']}, Ref: {qb_payment_data.get('ref_number')}")
-
-                                if not qb_payment_data.get("customer_name"):
-                                    logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} has no customer name. Skipping Odoo processing.")
-                                    continue
-                                
-                                try:
-                                    odoo_payment_id = create_or_update_odoo_payment(qb_payment_data)
-                                    if odoo_payment_id:
-                                        logger.info(f"    Successfully processed Payment {qb_payment_data['qb_txn_id']} for Odoo (Odoo ID: {odoo_payment_id}).")
-                                    else:
-                                        logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} processed for Odoo but no Odoo ID returned.")
-                                except Exception as e:
                                     logger.error(f"    Error processing Payment {qb_payment_data['qb_txn_id']} for Odoo: {e}", exc_info=True)
                             
 
