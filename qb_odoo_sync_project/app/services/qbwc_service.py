@@ -628,8 +628,7 @@ class QBWCService(ServiceBase):
                 iterator_id = current_task.get("iteratorID")
                 qbxml_version = session_data.get("qbxml_version", "13.0")
                 request_id_str = current_task.get("requestID", "1")
-                
-                # Correctly call the helper function with the expected parameters
+                # Only pass the expected arguments to the helper
                 xml_request = build_invoice_query_xml(
                     params,
                     qbxml_version,
