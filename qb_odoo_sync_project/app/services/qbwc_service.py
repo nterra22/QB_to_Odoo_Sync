@@ -356,40 +356,19 @@ def _extract_payment_data(payment_xml_element: ET.Element) -> Dict[str, Any]:
 # Helper to build QBXML using ElementTree for InvoiceQueryRq
 
 def build_invoice_query_xml(params, qbxml_version, request_id_str, iterator_id=None):
-    """Builds a well-formed InvoiceQueryRq QBXML using ElementTree."""
-    import xml.etree.ElementTree as ET
-    from xml.sax.saxutils import escape
-    
-    # Root QBXML
-    qbxml = ET.Element('QBXML')
-    msgs_rq = ET.SubElement(qbxml, 'QBXMLMsgsRq', onError="stopOnError")
-    
-    # InvoiceQueryRq
-    if iterator_id:
-        invoice_query = ET.SubElement(msgs_rq, 'InvoiceQueryRq', requestID=request_id_str, iterator="Continue", iteratorID=iterator_id)
-        ET.SubElement(invoice_query, 'MaxReturned').text = "10"
-    else:
-        invoice_query = ET.SubElement(msgs_rq, 'InvoiceQueryRq', requestID=request_id_str)
-        # Add ModifiedDateRangeFilter if present
-        if params.get('ModifiedDateRangeFilter'):
-            mod_filter = params['ModifiedDateRangeFilter']
-            mod_filter_elem = ET.SubElement(invoice_query, 'ModifiedDateRangeFilter')
-            ET.SubElement(mod_filter_elem, 'FromModifiedDate').text = escape(mod_filter.get('FromModifiedDate', '1980-01-01'))
-            if mod_filter.get('ToModifiedDate'):
-                ET.SubElement(mod_filter_elem, 'ToModifiedDate').text = escape(mod_filter['ToModifiedDate'])
-        else:
-            # Default wide filter
-            mod_filter_elem = ET.SubElement(invoice_query, 'ModifiedDateRangeFilter')
-            ET.SubElement(mod_filter_elem, 'FromModifiedDate').text = '1980-01-01'
-        # Only add IncludeLineItems if allowed
-        if params.get('IncludeLineItems') == 'true':
-            ET.SubElement(invoice_query, 'IncludeLineItems').text = 'true'
-        ET.SubElement(invoice_query, 'MaxReturned').text = "10"
-    # Serialize
-    xml_body = ET.tostring(qbxml, encoding='utf-8').decode('utf-8')
-    # Add XML declaration and PI
-    xml_decl = f'<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n'
-    return xml_decl + xml_body
+    """
+    Build a simple InvoiceQueryRq QBXML with only IncludeLineItems.
+    """
+    qbxml = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{qbxml_version}"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceQueryRq requestID="{request_id_str}">
+      <IncludeLineItems>true</IncludeLineItems>
+    </InvoiceQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>'''
+    return qbxml
 
 class QBWCService(ServiceBase):
     """QuickBooks Web Connector SOAP service implementation."""
@@ -430,7 +409,7 @@ class QBWCService(ServiceBase):
                 {
                     "type": QB_QUERY,
                     "entity": INVOICE_QUERY,
-                    "requestID": "1",
+                    "requestID": "2",
                     "iteratorID": None,
                     "params": {
                         "IncludeLineItems": "true"
