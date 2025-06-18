@@ -669,7 +669,6 @@ class QBWCService(ServiceBase):
   <QBXMLMsgsRq onError="stopOnError">
     <ReceivePaymentQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
-      <IncludeLineItems>true</IncludeLineItems> <!-- To see which invoices are paid -->
       <MaxReturned>50</MaxReturned>
     </ReceivePaymentQueryRq>
   </QBXMLMsgsRq>
@@ -719,7 +718,7 @@ class QBWCService(ServiceBase):
   </QBXMLMsgsRq>
 </QBXML>'''
                 else:
-                    logger.info(f"Starting new SalesOrderQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    logger.info(f"Starting new SalesOrderQueryRq for date: {params.get('TxnDateRangeFilter', {},).get('FromTxnDate', 'N/A')}.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
 <?qbxml version="{qbxml_version}"?>
 <QBXML>
@@ -729,7 +728,7 @@ class QBWCService(ServiceBase):
       {include_line_items_xml}
       <MaxReturned>50</MaxReturned>
     </SalesOrderQueryRq>
-  </QBXML>
+  </QBXMLMsgsRq>
 </QBXML>'''
             elif entity == PURCHASEORDER_QUERY: # New
                 params = current_task.get("params", {})
