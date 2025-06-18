@@ -429,13 +429,91 @@ class QBWCService(ServiceBase):
                 },
                 {
                     "type": QB_QUERY,
+                    "entity": VENDOR_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": { # Keep this for vendors
+                        "ModifiedDateRangeFilter": {
+                            "FromModifiedDate": "1980-01-01"
+                        }
+                    }
+                },
+                # { # Example for ItemQuery if added later
+                #     "type": QB_QUERY,
+                #     "entity": ITEM_QUERY,
+                #     "requestID": "1",
+                #     "iteratorID": None,
+                #     "params": {}
+                # },
+                {
+                    "type": QB_QUERY,
                     "entity": INVOICE_QUERY,
                     "requestID": "1",
                     "iteratorID": None,
                     "params": {
                         "IncludeLineItems": "true" # No date filter, fetch all
                     }
-                }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": BILL_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true",
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": RECEIVEPAYMENT_QUERY,
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        # "TxnDateRangeFilter" removed
+                        # IncludeLineItems is added in sendRequestXML for this query type
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": CREDITMEMO_QUERY, 
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": SALESORDER_QUERY, 
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": PURCHASEORDER_QUERY, 
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": { # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true"
+                    }
+                },
+                {
+                    "type": QB_QUERY,
+                    "entity": JOURNALENTRY_QUERY, 
+                    "requestID": "1",
+                    "iteratorID": None,
+                    "params": {
+                        # "TxnDateRangeFilter" removed
+                        "IncludeLineItems": "true" 
+                    }
+                },
+                # TODO: Add tasks for fetching data from Odoo to send to QB (QB_ADD, QB_MOD types)
             ]
 
             qbwc_session_state[session_key] = {
