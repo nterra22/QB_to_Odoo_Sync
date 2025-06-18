@@ -565,6 +565,15 @@ class QBWCService(ServiceBase):
             logger.info("sendRequestXML: All tasks completed for this session or task queue is empty initially.")
             return ""
 
+        # Ensure we skip completed tasks (in case of logic error)
+        while current_task_index < len(task_queue) and task_queue[current_task_index].get("iteratorID") is None and session_data.get("current_task_index", 0) > current_task_index:
+            current_task_index += 1
+            session_data["current_task_index"] = current_task_index
+
+        if current_task_index >= len(task_queue):
+            logger.info("sendRequestXML: All tasks completed after skipping completed tasks.")
+            return ""
+
         current_task = task_queue[current_task_index]
         logger.info(f"sendRequestXML: Processing task: {current_task}")
         session_data["active_task"] = current_task
@@ -1582,20 +1591,13 @@ def _compute_overall_progress(session_data):
 
     @rpc(_returns=Unicode)
     def serverVersion(self):
-        """Return server version information as a string per QBWC WSDL schema.
-        Return an empty string if no message is needed, or a version string for display/logging.
-        """
+        """Return server version as a plain string for QBWC schema compliance."""
         logger.debug("Method serverVersion called")
-        # Example: return version string or empty string
-        return "1.0.0"  # Or return "" if you want no message
+        return "1.0"  # Or "" to ignore versioning
 
     @rpc(Unicode, _returns=Unicode)
     def clientVersion(self, strVersion):
-        """Return a string per QBWC WSDL schema.
-        Return empty string if version is supported.
-        Return 'W:message' for warnings, or 'E:message' to block connection.
-        """
+        """Return client version as a plain string for QBWC schema compliance."""
         logger.debug("Method clientVersion called")
         logger.info(f"QBWC Service: clientVersion called with version: {strVersion}")
-        # Example logic: always allow
-        return ""  # Or return 'W:This is a warning' or 'E:This is an error' as needed
+        return "2.0.0"  # Or "" to ignore versioning
