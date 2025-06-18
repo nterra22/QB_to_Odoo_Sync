@@ -731,7 +731,7 @@ class QBWCService(ServiceBase):
       {include_line_items_xml}
       <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> 
     </JournalEntryQueryRq>
-  </QBXMLMsgsRq>
+  </QBXML>
 </QBXML>'''
 
         # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
@@ -1413,17 +1413,28 @@ class QBWCService(ServiceBase):
             save_qbwc_session_state()
             return "0"
             
+        # --- Refactored Progress Calculation ---
+        final_progress = 0
+        
+        # Step 1: Check if we are in the middle of an iteration for the current task.
+        # The 'progress' variable would have been set to 50 inside the try block.
+        if progress == 50:
+            final_progress = 50
+            logger.info(f"**PROGRESS_LOGIC: Continuation of an iterator detected. Progress set to 50%.")
+        else:
+            # Step 2: If not iterating, calculate progress based on completed tasks.
+            final_progress = _compute_overall_progress(session_data)
+            logger.info(f"**PROGRESS_LOGIC: No iterator. Calculated progress is {final_progress}%.");
+
+        # Step 3: Final check. If the index is at the end, it's 100%. This overrides previous calculations.
         if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
-            logger.info("All tasks in the current queue are processed.")
-            progress = 100
-        
-        if progress != 50:  # 50 signals QBWC to re-query this same iterator page
-            progress = _compute_overall_progress(session_data)
-        
+            final_progress = 100
+            logger.info(f"**PROGRESS_LOGIC: Task queue is now complete. Overriding progress to 100%.");
+
         save_qbwc_session_state()
-        logger.info(f"receiveResponseXML: Task index now: {session_data['current_task_index']}, Total tasks: {len(session_data.get('task_queue', []))}")
-        logger.info(f"receiveResponseXML returning progress: {progress}% for task: {active_task.get('entity', 'N/A')}")
-        return str(progress)
+        logger.info(f"receiveResponseXML: Task index is now: {session_data['current_task_index']}/{len(session_data.get('task_queue', []))}")
+        logger.info(f"receiveResponseXML FINAL return value: {final_progress}% for task: {active_task.get('entity', 'N/A') if active_task else 'N/A'}")
+        return str(final_progress)
 
     @rpc(Unicode, _returns=Unicode)
     def getLastError(self, ticket):
