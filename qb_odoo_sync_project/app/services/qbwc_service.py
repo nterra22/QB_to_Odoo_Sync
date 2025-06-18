@@ -160,6 +160,25 @@ def _extract_customer_data_from_ret(customer_ret_xml: ET.Element) -> Dict[str, A
     # Filter out None values to keep the payload clean
     return {k: v for k, v in data.items() if v is not None}
 
+def _extract_vendor_data_from_ret(vendor_ret_xml: ET.Element) -> Dict[str, Any]:
+    """Extracts detailed vendor data from a VendorRet XML element."""
+    data = {
+        "ListID": _get_xml_text(vendor_ret_xml.find('ListID')),
+        "TimeModifiedQB": _get_xml_text(vendor_ret_xml.find('TimeModified')),
+        "Name": _get_xml_text(vendor_ret_xml.find('Name')),
+        "FullName": _get_xml_text(vendor_ret_xml.find('FullName')),
+        "CompanyName": _get_xml_text(vendor_ret_xml.find('CompanyName')),
+        "FirstName": _get_xml_text(vendor_ret_xml.find('FirstName')),
+        "LastName": _get_xml_text(vendor_ret_xml.find('LastName')),
+        "Email": _get_xml_text(vendor_ret_xml.find('Email')),
+        "Phone": _get_xml_text(vendor_ret_xml.find('Phone')),
+        "IsActive": _get_xml_text(vendor_ret_xml.find('IsActive')) == 'true',
+        # Add more fields as needed from VendorRet
+    }
+    data.update(_extract_address_data(vendor_ret_xml.find('VendorAddress'), 'VendorAddress'))
+    # Filter out None values to keep the payload clean
+    return {k: v for k, v in data.items() if v is not None}
+
 # Helper function to extract text from XML element, with logging
 def _extract_text(xml_element: ET.Element, xpath: str) -> str:
     try:
@@ -294,6 +313,27 @@ def _extract_journal_entry_data(je_xml_element: ET.Element) -> Dict[str, Any]:
         data["lines"].append(line_data)
     
     logger.debug(f"Extracted QB Journal Entry Data for TxnID {data.get('qb_txn_id')}: {data}")
+    return data
+
+def _extract_payment_data(payment_xml_element: ET.Element) -> Dict[str, Any]:
+    """Extracts detailed payment data from a ReceivePaymentRet XML element."""
+    data = {
+        "qb_txn_id": _get_xml_text(payment_xml_element.find('TxnID')),
+        "customer_name": _get_xml_text(payment_xml_element.find('CustomerRef/FullName')),
+        "txn_date": _get_xml_text(payment_xml_element.find('TxnDate')),
+        "ref_number": _get_xml_text(payment_xml_element.find('RefNumber')),
+        "total_amount": float(_get_xml_text(payment_xml_element.find('TotalAmount'), '0.0') or 0.0),
+        "memo": _get_xml_text(payment_xml_element.find('Memo')),
+        "applied_to_txns": []
+    }
+    
+    for applied_txn_xml in payment_xml_element.findall('.//AppliedToTxnRet'):
+        applied_data = {
+            "applied_qb_invoice_txn_id": _get_xml_text(applied_txn_xml.find('TxnID')),
+            "payment_amount": float(_get_xml_text(applied_txn_xml.find('PaymentAmount'), '0.0') or 0.0)
+        }
+        data["applied_to_txns"].append(applied_data)
+        
     return data
 
 class QBWCService(ServiceBase):
@@ -792,26 +832,19 @@ class QBWCService(ServiceBase):
                             customers = customer_query_rs.findall('.//CustomerRet')
                             logger.info(f"Received {len(customers)} customers in this response.")
                             for cust_xml in customers:
-                                list_id_elem = cust_xml.find('ListID') 
-                                customer_list_id = list_id_elem.text if list_id_elem is not None else 'N/A'
-                                time_modified_elem = cust_xml.find('TimeModified')
-                                customer_time_modified = time_modified_elem.text if time_modified_elem is not None else datetime.now().isoformat()
+                                qb_customer_data = _extract_customer_data_from_ret(cust_xml)
+                                customer_list_id = qb_customer_data.get('ListID')
                                 
-                                parent_ref_list_id_elem = cust_xml.find('ParentRef/ListID')
-                                is_job = parent_ref_list_id_elem is not None and parent_ref_list_id_elem.text
-
-                                if not customer_list_id or customer_list_id == 'N/A':
+                                if not customer_list_id:
                                     logger.warning("Customer record found with no ListID. Skipping.")
                                     continue
 
-                                if is_job:
-                                    full_name_elem = cust_xml.find('FullName')
-                                    job_full_name = full_name_elem.text if full_name_elem is not None else customer_list_id
+                                # Check if the customer is a job (sub-customer)
+                                if qb_customer_data.get('ParentRef_ListID'):
+                                    job_full_name = qb_customer_data.get('FullName', customer_list_id)
                                     logger.info(f"QB record '{job_full_name}' (ListID: {customer_list_id}) is a job. Skipping Odoo partner creation.")
                                     continue
 
-                                qb_customer_data = _extract_customer_data_from_ret(cust_xml)
-                                
                                 customer_name_for_log = qb_customer_data.get("Name", qb_customer_data.get("FullName", f"ListID: {customer_list_id}"))
 
                                 if qb_customer_data:
@@ -861,34 +894,17 @@ class QBWCService(ServiceBase):
                             vendors = vendor_query_rs.findall('.//VendorRet')
                             logger.info(f"Received {len(vendors)} vendors in this response.")
                             for vend_xml in vendors:
-                                list_id_elem = vend_xml.find('ListID')
-                                vendor_list_id = list_id_elem.text if list_id_elem is not None else 'N/A'
-                                time_modified_elem = vend_xml.find('TimeModified')
-                                vendor_time_modified = time_modified_elem.text if time_modified_elem is not None else datetime.now().isoformat()
-                                
-                                name_elem = vend_xml.find('Name')
-                                vendor_name = name_elem.text if name_elem is not None and name_elem.text else None
+                                qb_vendor_data = _extract_vendor_data_from_ret(vend_xml)
+                                vendor_list_id = qb_vendor_data.get('ListID')
+                                vendor_name = qb_vendor_data.get('Name')
 
-                                if not vendor_list_id or vendor_list_id == 'N/A':
+                                if not vendor_list_id:
                                     logger.warning("Vendor record found with no ListID. Skipping.")
                                     continue
 
                                 if vendor_name:
                                     logger.info(f"  Processing Vendor: {vendor_name} (ListID: {vendor_list_id})")
                                     try:
-                                        qb_vendor_data = {
-                                            "ListID": vendor_list_id,
-                                            "TimeModifiedQB": vendor_time_modified,
-                                            "Name": vendor_name,
-                                            "FullName": _get_xml_text(vend_xml.find('FullName')),
-                                            "CompanyName": _get_xml_text(vend_xml.find('CompanyName')),
-                                            "FirstName": _get_xml_text(vend_xml.find('FirstName')),
-                                            "LastName": _get_xml_text(vend_xml.find('LastName')),
-                                            "Email": _get_xml_text(vend_xml.find('Email')),
-                                            "Phone": _get_xml_text(vend_xml.find('Phone')),
-                                            "IsActive": _get_xml_text(vend_xml.find('IsActive')) == 'true',
-                                        }
-
                                         odoo_vendor_id = create_or_update_odoo_partner(qb_vendor_data, is_supplier=True)
 
                                         if odoo_vendor_id:
@@ -898,7 +914,7 @@ class QBWCService(ServiceBase):
                                     except Exception as e:
                                         logger.error(f"    Error processing vendor '{vendor_name}' for Odoo: {e}", exc_info=True)
                                 else:
-                                    logger.warning(f"  Skipping vendor with missing name (ListID: {list_id_elem.text if list_id_elem is not None else 'N/A'}).")
+                                    logger.warning(f"  Skipping vendor with missing name (ListID: {vendor_list_id}).")
                             
 
                             iterator_id = vendor_query_rs.get("iteratorID")
@@ -934,70 +950,23 @@ class QBWCService(ServiceBase):
                             invoices = invoice_query_rs.findall('.//InvoiceRet')
                             logger.info(f"Received {len(invoices)} invoices in this response.")
                             for inv_xml in invoices:
-                                txn_id_elem = inv_xml.find('TxnID')
-                                qb_invoice_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_invoice_data = _extract_transaction_data(inv_xml, "Invoice")
                                 
-                                if not qb_invoice_txn_id:
+                                if not qb_invoice_data.get("qb_txn_id"):
                                     logger.warning("Invoice record found with no TxnID. Skipping.")
                                     continue
 
-                                customer_ref_full_name_elem = inv_xml.find('CustomerRef/FullName')
-                                
-                                original_qb_customer_name = customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None
-                                final_customer_name_for_odoo = original_qb_customer_name
-                                
+                                original_qb_customer_name = _get_xml_text(inv_xml.find('CustomerRef/FullName'))
                                 if original_qb_customer_name and ':' in original_qb_customer_name:
                                     parent_customer_name_from_job_string = original_qb_customer_name.split(':')[0].strip()
-                                    logger.info(f"Invoice {qb_invoice_txn_id} is for job '{original_qb_customer_name}'. Attempting to assign to parent customer '{parent_customer_name_from_job_string}'.")
-                                    final_customer_name_for_odoo = parent_customer_name_from_job_string
-
-                                txn_date_elem = inv_xml.find('TxnDate')
-                                due_date_elem = inv_xml.find('DueDate')
-                                memo_elem = inv_xml.find('Memo')
-                                is_paid_elem = inv_xml.find('IsPaid')
-                                subtotal_elem = inv_xml.find('Subtotal')
-                                sales_tax_total_elem = inv_xml.find('SalesTaxTotal')
-                                applied_amount_elem = inv_xml.find('AppliedAmount')
-                                balance_remaining_elem = inv_xml.find('BalanceRemaining')
-                                ref_number_elem = inv_xml.find('RefNumber')
-
-
-                                qb_invoice_data = {
-                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
-                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
-                                    "customer_name": final_customer_name_for_odoo,
-                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
-                                    "due_date": due_date_elem.text if due_date_elem is not None else None,
-                                    "memo": memo_elem.text if memo_elem is not None else None,
-                                    "is_paid": is_paid_elem.text == 'true' if is_paid_elem is not None else False,
-                                    "subtotal": float(subtotal_elem.text) if subtotal_elem is not None and subtotal_elem.text else 0.0,
-                                    "sales_tax_total": float(sales_tax_total_elem.text) if sales_tax_total_elem is not None and sales_tax_total_elem.text else 0.0,
-                                    "applied_amount": float(applied_amount_elem.text) if applied_amount_elem is not None and applied_amount_elem.text else 0.0,
-                                    "balance_remaining": float(balance_remaining_elem.text) if balance_remaining_elem is not None and balance_remaining_elem.text else 0.0,
-                                    "lines": []
-                                }
+                                    logger.info(f"Invoice {qb_invoice_data['qb_txn_id']} is for job '{original_qb_customer_name}'. Attempting to assign to parent customer '{parent_customer_name_from_job_string}'.")
+                                    qb_invoice_data["customer_name"] = parent_customer_name_from_job_string
                                 
-                                logger.info(f"  Processing Invoice TxnID: {qb_invoice_data['qb_txn_id']}, Ref: {qb_invoice_data['ref_number']}")
+                                logger.info(f"  Processing Invoice TxnID: {qb_invoice_data['qb_txn_id']}, Ref: {qb_invoice_data.get('ref_number')}")
 
-                                if not qb_invoice_data["customer_name"]:
+                                if not qb_invoice_data.get("customer_name"):
                                     logger.warning(f"    Invoice {qb_invoice_data['qb_txn_id']} has no customer name. Skipping Odoo processing for this invoice.")
                                     continue
-
-                                for line_xml in inv_xml.findall('.//InvoiceLineRet'):
-                                    item_ref_full_name_elem = line_xml.find('ItemRef/FullName')
-                                    desc_elem = line_xml.find('Desc')
-                                    quantity_elem = line_xml.find('Quantity')
-                                    rate_elem = line_xml.find('Rate')
-                                    amount_elem = line_xml.find('Amount')
-
-                                    line_data = {
-                                        "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
-                                        "description": desc_elem.text if desc_elem is not None else None,
-                                        "quantity": float(quantity_elem.text) if quantity_elem is not None and quantity_elem.text else 0.0,
-                                        "rate": float(rate_elem.text) if rate_elem is not None and rate_elem.text else 0.0,
-                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
-                                    }
-                                    qb_invoice_data["lines"].append(line_data)
                                 
                                 try:
                                     odoo_invoice_id = create_or_update_odoo_invoice(qb_invoice_data)
@@ -1040,62 +1009,17 @@ class QBWCService(ServiceBase):
                             bills = bill_query_rs.findall('.//BillRet')
                             logger.info(f"Received {len(bills)} bills in this response.")
                             for bill_xml in bills:
-                                txn_id_elem = bill_xml.find('TxnID')
-                                qb_bill_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_bill_data = _extract_transaction_data(bill_xml, "Bill")
 
-                                if not qb_bill_txn_id:
+                                if not qb_bill_data.get("qb_txn_id"):
                                     logger.warning("Bill record found with no TxnID. Skipping.")
                                     continue
 
-                                vendor_ref_full_name_elem = bill_xml.find('VendorRef/FullName')
-                                ref_number_elem = bill_xml.find('RefNumber')
-                                txn_date_elem = bill_xml.find('TxnDate')
-                                due_date_elem = bill_xml.find('DueDate')
-                                amount_due_elem = bill_xml.find('AmountDue')
-                                memo_elem = bill_xml.find('Memo')
+                                logger.info(f"  Processing Bill TxnID: {qb_bill_data['qb_txn_id']}, Ref: {qb_bill_data.get('ref_number')}")
 
-                                qb_bill_data = {
-                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
-                                    "vendor_name": vendor_ref_full_name_elem.text if vendor_ref_full_name_elem is not None else None,
-                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
-                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
-                                    "due_date": due_date_elem.text if due_date_elem is not None else None,
-                                    "amount_due": float(amount_due_elem.text) if amount_due_elem is not None and amount_due_elem.text else 0.0,
-                                    "memo": memo_elem.text if memo_elem is not None else None,
-                                    "expense_lines": [],
-                                    "item_lines": []
-                                }
-                                logger.info(f"  Processing Bill TxnID: {qb_bill_data['qb_txn_id']}, Ref: {qb_bill_data['ref_number']}")
-
-                                if not qb_bill_data["vendor_name"]:
+                                if not qb_bill_data.get("vendor_name"):
                                     logger.warning(f"    Bill {qb_bill_data['qb_txn_id']} has no vendor name. Skipping Odoo processing.")
                                     continue
-
-                                for line_xml in bill_xml.findall('.//ExpenseLineRet'):
-                                    account_ref_full_name_elem = line_xml.find('AccountRef/FullName')
-                                    amount_elem = line_xml.find('Amount')
-                                    memo_elem = line_xml.find('Memo')
-                                    expense_line_data = {
-                                        "account_name": account_ref_full_name_elem.text if account_ref_full_name_elem is not None else None,
-                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
-                                        "memo": memo_elem.text if memo_elem is not None else None,
-                                    }
-                                    qb_bill_data["expense_lines"].append(expense_line_data)
-
-                                for line_xml in bill_xml.findall('.//ItemLineRet'):
-                                    item_ref_full_name_elem = line_xml.find('ItemRef/FullName')
-                                    desc_elem = line_xml.find('Desc')
-                                    quantity_elem = line_xml.find('Quantity')
-                                    cost_elem = line_xml.find('Cost')
-                                    amount_elem = line_xml.find('Amount')
-                                    item_line_data = {
-                                        "item_name": item_ref_full_name_elem.text if item_ref_full_name_elem is not None else None,
-                                        "description": desc_elem.text if desc_elem is not None else None,
-                                        "quantity": float(quantity_elem.text) if quantity_elem is not None and quantity_elem.text else 0.0,
-                                        "cost": float(cost_elem.text) if cost_elem is not None and cost_elem.text else 0.0,
-                                        "amount": float(amount_elem.text) if amount_elem is not None and amount_elem.text else 0.0,
-                                    }
-                                    qb_bill_data["item_lines"].append(item_line_data)
                                 
                                 try:
                                     odoo_bill_id = create_or_update_odoo_bill(qb_bill_data)
@@ -1137,42 +1061,17 @@ class QBWCService(ServiceBase):
                             payments = payment_query_rs.findall('.//ReceivePaymentRet')
                             logger.info(f"Received {len(payments)} payments in this response.")
                             for payment_xml in payments:
-                                txn_id_elem = payment_xml.find('TxnID')
-                                qb_payment_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_payment_data = _extract_payment_data(payment_xml)
 
-                                if not qb_payment_txn_id:
+                                if not qb_payment_data.get("qb_txn_id"):
                                     logger.warning("Payment record found with no TxnID. Skipping.")
                                     continue
                                 
-                                customer_ref_full_name_elem = payment_xml.find('CustomerRef/FullName')
-                                txn_date_elem = payment_xml.find('TxnDate')
-                                ref_number_elem = payment_xml.find('RefNumber')
-                                total_amount_elem = payment_xml.find('TotalAmount')
-                                memo_elem = payment_xml.find('Memo')
+                                logger.info(f"  Processing Payment TxnID: {qb_payment_data['qb_txn_id']}, Ref: {qb_payment_data.get('ref_number')}")
 
-                                qb_payment_data = {
-                                    "qb_txn_id": txn_id_elem.text if txn_id_elem is not None else None,
-                                    "customer_name": customer_ref_full_name_elem.text if customer_ref_full_name_elem is not None else None,
-                                    "txn_date": txn_date_elem.text if txn_date_elem is not None else None,
-                                    "ref_number": ref_number_elem.text if ref_number_elem is not None else None,
-                                    "total_amount": float(total_amount_elem.text) if total_amount_elem is not None and total_amount_elem.text else 0.0,
-                                    "memo": memo_elem.text if memo_elem is not None else None,
-                                    "applied_to_txns": []
-                                }
-                                logger.info(f"  Processing Payment TxnID: {qb_payment_data['qb_txn_id']}, Ref: {qb_payment_data['ref_number']}")
-
-                                if not qb_payment_data["customer_name"]:
+                                if not qb_payment_data.get("customer_name"):
                                     logger.warning(f"    Payment {qb_payment_data['qb_txn_id']} has no customer name. Skipping Odoo processing.")
                                     continue
-                                
-                                for applied_txn_xml in payment_xml.findall('.//AppliedToTxnRet'):
-                                    applied_txn_id_elem = applied_txn_xml.find('TxnID')
-                                    payment_amount_elem = applied_txn_xml.find('PaymentAmount')
-                                    applied_data = {
-                                        "applied_qb_invoice_txn_id": applied_txn_id_elem.text if applied_txn_id_elem is not None else None,
-                                        "payment_amount": float(payment_amount_elem.text) if payment_amount_elem is not None and payment_amount_elem.text else 0.0
-                                    }
-                                    qb_payment_data["applied_to_txns"].append(applied_data)
                                 
                                 try:
                                     odoo_payment_id = create_or_update_odoo_payment(qb_payment_data)
@@ -1213,14 +1112,12 @@ class QBWCService(ServiceBase):
                             credit_memos = credit_memo_query_rs.findall('.//CreditMemoRet')
                             logger.info(f"Received {len(credit_memos)} credit memos in this response.")
                             for cm_xml in credit_memos:
-                                txn_id_elem = cm_xml.find('TxnID')
-                                qb_cm_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_cm_data = _extract_transaction_data(cm_xml, "CreditMemo")
 
-                                if not qb_cm_txn_id:
+                                if not qb_cm_data.get("qb_txn_id"):
                                     logger.warning("Credit Memo record found with no TxnID. Skipping.")
                                     continue
                                 
-                                qb_cm_data = _extract_transaction_data(cm_xml, "CreditMemo")
                                 logger.info(f"  Processing Credit Memo TxnID: {qb_cm_data.get('qb_txn_id')}, Ref: {qb_cm_data.get('ref_number')}")
                                 try:
                                     odoo_cm_id = create_or_update_odoo_credit_memo(qb_cm_data)
@@ -1261,14 +1158,12 @@ class QBWCService(ServiceBase):
                             sales_orders = sales_order_query_rs.findall('.//SalesOrderRet')
                             logger.info(f"Received {len(sales_orders)} sales orders in this response.")
                             for so_xml in sales_orders:
-                                txn_id_elem = so_xml.find('TxnID')
-                                qb_so_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_so_data = _extract_transaction_data(so_xml, "SalesOrder")
 
-                                if not qb_so_txn_id:
+                                if not qb_so_data.get("qb_txn_id"):
                                     logger.warning("Sales Order record found with no TxnID. Skipping.")
                                     continue
                                 
-                                qb_so_data = _extract_transaction_data(so_xml, "SalesOrder")
                                 logger.info(f"  Processing Sales Order TxnID: {qb_so_data.get('qb_txn_id')}, Ref: {qb_so_data.get('ref_number')}")
                                 try:
                                     odoo_so_id = create_or_update_odoo_sales_order(qb_so_data)
@@ -1309,14 +1204,12 @@ class QBWCService(ServiceBase):
                             purchase_orders = purchase_order_query_rs.findall('.//PurchaseOrderRet')
                             logger.info(f"Received {len(purchase_orders)} purchase orders in this response.")
                             for po_xml in purchase_orders:
-                                txn_id_elem = po_xml.find('TxnID')
-                                qb_po_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_po_data = _extract_transaction_data(po_xml, "PurchaseOrder")
 
-                                if not qb_po_txn_id:
+                                if not qb_po_data.get("qb_txn_id"):
                                     logger.warning("Purchase Order record found with no TxnID. Skipping.")
                                     continue
                                 
-                                qb_po_data = _extract_transaction_data(po_xml, "PurchaseOrder")
                                 logger.info(f"  Processing Purchase Order TxnID: {qb_po_data.get('qb_txn_id')}, Ref: {qb_po_data.get('ref_number')}")
                                 try:
                                     odoo_po_id = create_or_update_odoo_purchase_order(qb_po_data)
@@ -1357,14 +1250,12 @@ class QBWCService(ServiceBase):
                             journal_entries = journal_entry_query_rs.findall('.//JournalEntryRet')
                             logger.info(f"Received {len(journal_entries)} journal entries in this response.")
                             for je_xml in journal_entries:
-                                txn_id_elem = je_xml.find('TxnID')
-                                qb_je_txn_id = txn_id_elem.text if txn_id_elem is not None else None
+                                qb_je_data = _extract_journal_entry_data(je_xml)
 
-                                if not qb_je_txn_id:
+                                if not qb_je_data.get("qb_txn_id"):
                                     logger.warning("Journal Entry record found with no TxnID. Skipping.")
                                     continue
                                 
-                                qb_je_data = _extract_journal_entry_data(je_xml)
                                 logger.info(f"  Processing Journal Entry TxnID: {qb_je_data.get('qb_txn_id')}, Ref: {qb_je_data.get('ref_number')}")
                                 try:
                                     odoo_je_id = create_or_update_odoo_journal_entry(qb_je_data)
