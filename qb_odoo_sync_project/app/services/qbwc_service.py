@@ -599,10 +599,15 @@ class QBWCService(ServiceBase):
 </QBXML>'''
             
             elif entity == VENDOR_QUERY:
+                params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
+                # Build VendorQueryRq QBXML
                 if iterator_id:
                     logger.info(f"Continuing VendorQueryRq with iteratorID: {iterator_id}")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
+<?qbxml version="{qbxml_version}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
@@ -613,11 +618,10 @@ class QBWCService(ServiceBase):
                 else:
                     logger.info("Starting new VendorQueryRq.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
+<?qbxml version="{qbxml_version}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <VendorQueryRq requestID="{request_id_str}">
-      <!-- <ActiveStatus>ActiveOnly</ActiveStatus> -->
       <MaxReturned>50</MaxReturned>
     </VendorQueryRq>
   </QBXMLMsgsRq>
@@ -637,122 +641,99 @@ class QBWCService(ServiceBase):
                 )
             elif entity == BILL_QUERY:
                 params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 include_line_items_xml = _get_include_line_items_xml(params)
-
                 if iterator_id:
                     logger.info(f"Continuing BillQueryRq with iteratorID: {iterator_id}")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
+<?qbxml version="{qbxml_version}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <BillQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned> 
+      <MaxReturned>50</MaxReturned>
     </BillQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
                 else:
-                    logger.info(f"Starting new BillQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    logger.info("Starting new BillQueryRq.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{session_data["qbxml_version"]}"?>
+<?qbxml version="{qbxml_version}"?>
 <QBXML>
   <QBXMLMsgsRq onError="stopOnError">
     <BillQueryRq requestID="{request_id_str}">
       {txn_date_filter_xml}
       {include_line_items_xml}
-      <MaxReturned>50</MaxReturned> 
+      <MaxReturned>50</MaxReturned>
     </BillQueryRq>
   </QBXMLMsgsRq>
 </QBXML>'''
             elif entity == RECEIVEPAYMENT_QUERY:
                 params = current_task.get("params", {})
-                txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 iterator_id = current_task.get("iteratorID")
-                request_id_str = current_task.get("requestID", "1")
                 qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
+                txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 if iterator_id:
                     logger.info(f"Continuing ReceivePaymentQueryRq with iteratorID: {iterator_id}")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <ReceivePaymentQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>50</MaxReturned>\n    </ReceivePaymentQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
-                    logger.info(f"Starting new ReceivePaymentQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    logger.info("Starting new ReceivePaymentQueryRq.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <ReceivePaymentQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>50</MaxReturned>\n    </ReceivePaymentQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
-
-            elif entity == CREDITMEMO_QUERY: # New
+            elif entity == CREDITMEMO_QUERY:
                 params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 include_line_items_xml = _get_include_line_items_xml(params)
                 if iterator_id:
                     logger.info(f"Continuing CreditMemoQueryRq with iteratorID: {iterator_id}")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbxml_version}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <CreditMemoQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
-    </CreditMemoQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <CreditMemoQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>50</MaxReturned>\n    </CreditMemoQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
-                    logger.info(f"Starting new CreditMemoQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbxml_version}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <CreditMemoQueryRq requestID="{request_id_str}">
-      {txn_date_filter_xml}
-      {include_line_items_xml}
-      <MaxReturned>50</MaxReturned>
-    </CreditMemoQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
-            elif entity == SALESORDER_QUERY: # New
+                    logger.info("Starting new CreditMemoQueryRq.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <CreditMemoQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      {include_line_items_xml}\n      <MaxReturned>50</MaxReturned>\n    </CreditMemoQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
+            elif entity == SALESORDER_QUERY:
                 params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 include_line_items_xml = _get_include_line_items_xml(params)
                 if iterator_id:
                     logger.info(f"Continuing SalesOrderQueryRq with iteratorID: {iterator_id}")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbxml_version}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <SalesOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">
-      <MaxReturned>50</MaxReturned>
-    </SalesOrderQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <SalesOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>50</MaxReturned>\n    </SalesOrderQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
-                    logger.info(f"Starting new SalesOrderQueryRq for date: {params.get('TxnDateRangeFilter', {},).get('FromTxnDate', 'N/A')}.")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="{qbxml_version}"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <SalesOrderQueryRq requestID="{request_id_str}">
-      {txn_date_filter_xml}
-      {include_line_items_xml}
-      <MaxReturned>50</MaxReturned>
-    </SalesOrderQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>'''
-            elif entity == PURCHASEORDER_QUERY: # New
+                    logger.info("Starting new SalesOrderQueryRq.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <SalesOrderQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      {include_line_items_xml}\n      <MaxReturned>50</MaxReturned>\n    </SalesOrderQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
+            elif entity == PURCHASEORDER_QUERY:
                 params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
                 include_line_items_xml = _get_include_line_items_xml(params)
                 if iterator_id:
                     logger.info(f"Continuing PurchaseOrderQueryRq with iteratorID: {iterator_id}")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <PurchaseOrderQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>50</MaxReturned>\n    </PurchaseOrderQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
-                    logger.info(f"Starting new PurchaseOrderQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
+                    logger.info("Starting new PurchaseOrderQueryRq.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <PurchaseOrderQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      {include_line_items_xml}\n      <MaxReturned>50</MaxReturned>\n    </PurchaseOrderQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
             elif entity == JOURNALENTRY_QUERY:
                 params = current_task.get("params", {})
+                iterator_id = current_task.get("iteratorID")
+                qbxml_version = session_data.get("qbxml_version", "13.0")
+                request_id_str = current_task.get("requestID", "1")
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
-                # Remove IncludeLineItems for JournalEntryQueryRq if not supported
+                max_entries = 50
                 if iterator_id:
                     logger.info(f"Continuing JournalEntryQueryRq with iteratorID: {iterator_id}")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> \n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}" iterator="Continue" iteratorID="{iterator_id}">\n      <MaxReturned>{max_entries}</MaxReturned>\n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
                 else:
-                    logger.info(f"Starting new JournalEntryQueryRq for date: {params.get('TxnDateRangeFilter', {}).get('FromTxnDate', 'N/A')}.")
-                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>{MAX_JOURNAL_ENTRIES_PER_REQUEST}</MaxReturned> \n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
+                    logger.info("Starting new JournalEntryQueryRq.")
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>{max_entries}</MaxReturned>\n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
 
         # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
         # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync
