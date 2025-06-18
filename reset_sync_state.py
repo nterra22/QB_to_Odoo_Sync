@@ -8,6 +8,9 @@ APP_DIR = PROJECT_ROOT / "qb_odoo_sync_project"
 DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs" # Assuming logs are in qb_odoo_sync_project/logs
 
+# Add the path to the session state file at the project root
+QBWC_SESSION_STATE_FILE = PROJECT_ROOT / "qbwc_session_state.json"
+
 SYNC_CACHE_FILE = DATA_DIR / "sync_cache.json"
 QBWC_DEBUG_LOG_FILE = LOG_DIR / "qbwc_debug.log"
 QB_ODOO_SYNC_LOG_FILE = LOG_DIR / "qb_odoo_sync.log" # Main application log
@@ -26,12 +29,16 @@ def clear_file(file_path):
 def main():
     print("--- Starting Fresh: Clearing Sync State for QB Odoo Sync ---")
 
-    # 1. Clear sync cache file
-    print("\nStep 1: Clearing application sync cache...")
+    # 1. Clear the main session state file
+    print("\nStep 1: Clearing QBWC session state file...")
+    clear_file(QBWC_SESSION_STATE_FILE)
+
+    # 2. Clear sync cache file
+    print("\nStep 2: Clearing application sync cache...")
     clear_file(SYNC_CACHE_FILE)
 
-    # 2. Clear log files
-    print("\nStep 2: Clearing log files...")
+    # 3. Clear log files
+    print("\nStep 3: Clearing log files...")
     clear_file(QBWC_DEBUG_LOG_FILE)
     clear_file(QB_ODOO_SYNC_LOG_FILE) # Clear the main log as well
 

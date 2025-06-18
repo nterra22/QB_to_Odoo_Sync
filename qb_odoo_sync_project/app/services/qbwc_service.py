@@ -628,12 +628,14 @@ class QBWCService(ServiceBase):
                 iterator_id = current_task.get("iteratorID")
                 qbxml_version = session_data.get("qbxml_version", "13.0")
                 request_id_str = current_task.get("requestID", "1")
-                from_date = "1980-01-01"
-                to_date = None
-                if "ModifiedDateRangeFilter" in params:
-                    from_date = params["ModifiedDateRangeFilter"].get("FromModifiedDate", from_date)
-                    to_date = params["ModifiedDateRangeFilter"].get("ToModifiedDate", to_date)
-                xml_request = build_invoice_query_xml(request_id_str, qbxml_version, iterator_id, 10, from_date, to_date, include_line_items=True)
+                
+                # Correctly call the helper function with the expected parameters
+                xml_request = build_invoice_query_xml(
+                    params,
+                    qbxml_version,
+                    request_id_str,
+                    iterator_id
+                )
             elif entity == BILL_QUERY:
                 params = current_task.get("params", {})
                 txn_date_filter_xml = _get_txn_date_filter_xml(params)
@@ -1284,27 +1286,26 @@ class QBWCService(ServiceBase):
             return "0"
             
         # --- Refactored Progress Calculation ---
-        final_progress = 0
+        progress_to_return = 0
         
-        # Step 1: Check if we are in the middle of an iteration for the current task.
-        # The 'progress' variable would have been set to 50 inside the try block.
+        # If we are in the middle of an iteration for the current task, report 50% for this task
         if progress == 50:
-            final_progress = 50
+            progress_to_return = 50
             logger.info(f"**PROGRESS_LOGIC: Continuation of an iterator detected. Progress set to 50%.")
         else:
-            # Step 2: If not iterating, calculate progress based on completed tasks.
-            final_progress = _compute_overall_progress(session_data)
-            logger.info(f"**PROGRESS_LOGIC: No iterator. Calculated progress is {final_progress}%.");
+            # If not iterating, calculate progress based on completed tasks.
+            progress_to_return = _compute_overall_progress(session_data)
+            logger.info(f"**PROGRESS_LOGIC: No iterator. Calculated progress is {progress_to_return}%.");
 
-        # Step 3: Final check. If the index is at the end, it's 100%. This overrides previous calculations.
+        # Final check: if the index is at the end, it's 100%.
         if session_data["current_task_index"] >= len(session_data.get("task_queue", [])):
-            final_progress = 100
+            progress_to_return = 100
             logger.info(f"**PROGRESS_LOGIC: Task queue is now complete. Overriding progress to 100%.");
 
         save_qbwc_session_state()
         logger.info(f"receiveResponseXML: Task index is now: {session_data['current_task_index']}/{len(session_data.get('task_queue', []))}")
-        logger.info(f"receiveResponseXML FINAL return value: {final_progress}% for task: {active_task.get('entity', 'N/A') if active_task else 'N/A'}")
-        return str(final_progress)
+        logger.info(f"receiveResponseXML FINAL return value: {progress_to_return}% for task: {active_task.get('entity', 'N/A') if active_task else 'N/A'}")
+        return str(progress_to_return)
 
     @rpc(Unicode, _returns=Unicode)
     def getLastError(self, ticket):
@@ -1344,6 +1345,23 @@ class QBWCService(ServiceBase):
             logger.warning(f"closeConnection: Ticket {ticket} not found")
         
         return "OK"
+
+def _compute_overall_progress(session_data):
+    """
+    Helper function to calculate the overall progress of the sync.
+    """
+    
+    task_queue = session_data.get("task_queue", [])
+    current_task_index = session_data.get("current_task_index", 0)
+    total_tasks = len(task_queue)
+
+    if total_tasks == 0:
+        return 100
+
+    progress = int((current_task_index / total_tasks) * 100)
+    
+    # Ensure progress is capped at 100
+    return min(progress, 100)
 
     @rpc(_returns=Unicode)
     def serverVersion(self):
