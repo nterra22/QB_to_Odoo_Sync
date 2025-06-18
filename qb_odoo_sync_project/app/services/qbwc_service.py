@@ -1191,7 +1191,7 @@ class QBWCService(ServiceBase):
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
                         else:
-                            logger.error(f"SalesOrderQueryRs failed: {status_message}")
+                            logger.error(f"SalesOrderQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
                     else:
@@ -1572,32 +1572,15 @@ class QBWCService(ServiceBase):
         
         return "OK"
 
-def _compute_overall_progress(session_data):
-    """
-    Helper function to calculate the overall progress of the sync.
-    """
-    
-    task_queue = session_data.get("task_queue", [])
-    current_task_index = session_data.get("current_task_index", 0)
-    total_tasks = len(task_queue)
-
-    if total_tasks == 0:
-        return 100
-
-    progress = int((current_task_index / total_tasks) * 100)
-    
-    # Ensure progress is capped at 100
-    return min(progress, 100)
-
     @rpc(_returns=Unicode)
-    def serverVersion(self):
+    def serverVersion(ctx):
         """Return server version as a plain string for QBWC schema compliance."""
         logger.debug("Method serverVersion called")
-        return "1.0"  # Or "" to ignore versioning
+        return "1.0"
 
     @rpc(Unicode, _returns=Unicode)
-    def clientVersion(self, strVersion):
+    def clientVersion(ctx, strVersion):
         """Return client version as a plain string for QBWC schema compliance."""
         logger.debug("Method clientVersion called")
         logger.info(f"QBWC Service: clientVersion called with version: {strVersion}")
-        return "2.0.0"  # Or "" to ignore versioning
+        return "2.0.0"
