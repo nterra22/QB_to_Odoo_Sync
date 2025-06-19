@@ -1019,6 +1019,16 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
             logger.error(f"Sales journal '{default_journal_name}' not found in Odoo, and no other sales journal available. Cannot create invoice.")
             return None
 
+    # Only create invoices dated today
+    from datetime import datetime
+    invoice_date = qb_invoice_data.get("invoice_date")
+    if isinstance(invoice_date, str):
+        invoice_date_obj = datetime.strptime(invoice_date, "%Y-%m-%d").date()
+    else:
+        invoice_date_obj = invoice_date
+    if invoice_date_obj != datetime.today().date():
+        return None
+
     # Prepare invoice lines
     invoice_lines_for_odoo = []
     for qb_line in qb_invoice_data.get("lines", []):
@@ -1407,9 +1417,10 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
         existing_credit_memos = _odoo_rpc_call(
             model="account.move",
             method="search_read",
-            args_list=[["x_qb_txn_id", "=", qb_credit_memo_data.get("qb_txn_id")], ["move_type", "=", "out_refund"]],
+            args_list=[[('x_qb_txn_id', '=', qb_credit_memo_data.get('qb_txn_id')), ('move_type', '=', 'out_refund')]],
             kwargs_dict={"fields": ["id"], "limit": 1}
         )
+
         if existing_credit_memos:
             existing_credit_memo_id = existing_credit_memos[0]["id"]
             logger.info(f"Found existing Odoo credit memo ID: {existing_credit_memo_id} for QB TxnID: {qb_credit_memo_data.get('qb_txn_id')}")
