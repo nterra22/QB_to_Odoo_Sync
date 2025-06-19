@@ -1019,16 +1019,6 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
             logger.error(f"Sales journal '{default_journal_name}' not found in Odoo, and no other sales journal available. Cannot create invoice.")
             return None
 
-    # Only create invoices dated today
-    from datetime import datetime
-    txn_date = qb_invoice_data.get("TxnDate")
-    if isinstance(txn_date, str):
-        txn_date_obj = datetime.strptime(txn_date, "%Y-%m-%d").date()
-    else:
-        txn_date_obj = txn_date
-    if txn_date_obj != datetime.today().date():
-        return None
-
     # Prepare invoice lines
     invoice_lines_for_odoo = []
     for qb_line in qb_invoice_data.get("lines", []):
