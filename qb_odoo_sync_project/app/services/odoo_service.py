@@ -204,9 +204,7 @@ def ensure_partner_exists(name: str, **kwargs) -> Optional[int]:
     logger.info(f"Partner '{name}' not found. Creating...")
     partner_data = {
         "name": name,
-        "is_company": False,  # Assume individual unless specified, QB often doesn't distinguish well for this sync
-        # "supplier_rank": 1 if is_supplier else 0, # Set rank based on hint
-        # "customer_rank": 1 if is_customer else 0  # Set rank based on hint
+        "is_company": False,  # Always create as individual
     }
     # More sophisticated logic might be needed if a partner can be both
     # For now, if is_supplier is true, we prioritize that.
