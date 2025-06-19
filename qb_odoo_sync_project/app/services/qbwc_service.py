@@ -17,7 +17,7 @@ MAX_JOURNAL_ENTRIES_PER_REQUEST = 10  # Default value previously in config
 
 # Define task types
 QB_QUERY = "QB_QUERY"
-# QB_ADD = "QB_ADD" # For Odoo to QB
+QB_ADD_INVOICE = "QB_ADD_INVOICE"  # New task type for adding invoices from Odoo to QB
 # QB_MOD = "QB_MOD" # For Odoo to QB
 
 # Define entities for QB queries
@@ -414,6 +414,13 @@ class QBWCService(ServiceBase):
                     "params": {
                         "IncludeLineItems": "true"
                     }
+                },
+                {
+                    "type": QB_ADD_INVOICE,
+                    "entity": "InvoiceAdd",
+                    "requestID": "3",
+                    "iteratorID": None,
+                    "params": {}
                 }
             ]
 
@@ -645,8 +652,26 @@ class QBWCService(ServiceBase):
                     logger.info("Starting new JournalEntryQueryRq.")
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>{max_entries}</MaxReturned>\n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
 
+        elif current_task["type"] == QB_ADD_INVOICE:
+            # Import here to avoid circular import
+            from .odoo_service import get_odoo_invoices_created_today
+            from ..utils.data_loader import get_field_mapping
+            from ..utils.qbxml_builder import build_invoice_add_qbxml
+
+            logger.info("Processing QB_ADD_INVOICE task: Fetching today's Odoo invoices and building QBXML requests.")
+            odoo_invoices = get_odoo_invoices_created_today()
+            field_mapping = get_field_mapping()
+            if not odoo_invoices:
+                logger.info("No Odoo invoices created today to send to QuickBooks.")
+                xml_request = ""
+            else:
+                # For simplicity, send only the first invoice in this request (can be expanded to batching)
+                qbxml = build_invoice_add_qbxml(odoo_invoices[0], field_mapping)
+                logger.info(f"Built InvoiceAdd QBXML for Odoo invoice ID {odoo_invoices[0].get('id')}")
+                xml_request = qbxml
+
         # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
-        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB sync
+        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB
 
         logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}")
         logger.info(f"Generated XML request (first 500 chars): {xml_request[:500] if xml_request else 'EMPTY REQUEST'}")
@@ -1216,7 +1241,7 @@ class QBWCService(ServiceBase):
 
         save_qbwc_session_state()
         logger.info(f"receiveResponseXML: Task index is now: {session_data['current_task_index']}/{len(session_data.get('task_queue', []))}")
-        logger.info(f"receiveResponseXML FINAL return value: {progress_to_return}% for task: {active_task.get('entity', 'N/A') if active_task else 'N/A'}")
+        logger.info(f"receiveResponseXML FINAL return value: {progress_to_return}% for task: {active_task.get('entity', 'N/A')}")
         return str(progress_to_return)
 
     @rpc(Unicode, _returns=Unicode)

@@ -1496,3 +1496,44 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
         else:
             logger.error(f"Failed to create Odoo credit memo for QB Ref: {qb_credit_memo_data.get('ref_number')}")
             return None
+
+def get_odoo_invoices_created_today():
+    """
+    Query Odoo for invoices created today (in Bermuda timezone).
+    Uses the field mapping dictionary as a reference for account mapping.
+    Returns a list of invoice dicts.
+    """
+    bermuda_tz = timezone("Atlantic/Bermuda")
+    today_bermuda = datetime.now(bermuda_tz).date()
+    today_start = bermuda_tz.localize(datetime.combine(today_bermuda, datetime.min.time()))
+    today_end = bermuda_tz.localize(datetime.combine(today_bermuda, datetime.max.time()))
+
+    # Odoo stores datetimes in UTC, so convert Bermuda times to UTC
+    today_start_utc = today_start.astimezone(timezone('UTC'))
+    today_end_utc = today_end.astimezone(timezone('UTC'))
+
+    domain = [
+        ("create_date", ">=", today_start_utc.strftime("%Y-%m-%d %H:%M:%S")),
+        ("create_date", "<=", today_end_utc.strftime("%Y-%m-%d %H:%M:%S")),
+        ("state", "!=", "cancel"),
+    ]
+    fields = ["id", "name", "partner_id", "move_type", "invoice_date", "create_date", "amount_total", "invoice_line_ids", "journal_id", "currency_id", "state"]
+    # Add any fields referenced in the field mapping
+    invoice_mapping = FIELD_MAPPING.get("entities", {}).get("Invoices", {})
+    if isinstance(invoice_mapping, dict):
+        for odoo_field in invoice_mapping.values():
+            if odoo_field not in fields:
+                fields.append(odoo_field)
+
+    logger.info(f"Querying Odoo for today's invoices: {today_start_utc} to {today_end_utc}")
+    invoices = _odoo_rpc_call(
+        model="account.move",
+        method="search_read",
+        args_list=[domain],
+        kwargs_dict={"fields": fields, "limit": 1000}
+    )
+    if invoices is None:
+        logger.error("Failed to fetch today's invoices from Odoo.")
+        return []
+    logger.info(f"Fetched {len(invoices)} invoices created today from Odoo.")
+    return invoices
