@@ -1021,12 +1021,12 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
 
     # Only create invoices dated today
     from datetime import datetime
-    invoice_date = qb_invoice_data.get("invoice_date")
-    if isinstance(invoice_date, str):
-        invoice_date_obj = datetime.strptime(invoice_date, "%Y-%m-%d").date()
+    txn_date = qb_invoice_data.get("TxnDate")
+    if isinstance(txn_date, str):
+        txn_date_obj = datetime.strptime(txn_date, "%Y-%m-%d").date()
     else:
-        invoice_date_obj = invoice_date
-    if invoice_date_obj != datetime.today().date():
+        txn_date_obj = txn_date
+    if txn_date_obj != datetime.today().date():
         return None
 
     # Prepare invoice lines
@@ -1419,6 +1419,7 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
             method="search_read",
             args_list=[[('x_qb_txn_id', '=', qb_credit_memo_data.get('qb_txn_id')), ('move_type', '=', 'out_refund')]],
             kwargs_dict={"fields": ["id"], "limit": 1}
+
         )
 
         if existing_credit_memos:
