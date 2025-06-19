@@ -630,6 +630,10 @@ def ensure_product_exists(model_code: str, description: str,
     model_code = model_code.strip()
     description = description.strip() if description else model_code
     
+    # If model_code contains a colon, extract only the part after the colon for default_code
+    if ':' in model_code:
+        model_code = model_code.split(':', 1)[1].strip()
+
     products = _odoo_rpc_call(
         "product.product",
         "search_read", 
