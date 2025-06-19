@@ -9,8 +9,10 @@ Handles all interactions with the Odoo ERP system including:
 """
 import xmlrpc.client # Added import
 # import requests # Keep for potential future use or other integrations
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Dict, Any, List
+from dateutil.parser import isoparse
+from pytz import timezone
 from ..logging_config import logger
 # Ensure this path is correct based on your project structure
 from ..utils.data_loader import get_field_mapping # Corrected import
@@ -987,6 +989,38 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         logger.error("Invoice mapping not found in field_mapping.json. Cannot process invoice.")
         return None
 
+    # Only import invoices created today based on the QBWC-recognized 'TxnDate' field.
+    txn_date = qb_invoice_data.get("TxnDate") or qb_invoice_data.get("txn_date")
+    logger.debug(f"Raw TxnDate from QB: '{txn_date}' (type: {type(txn_date)})")
+
+    if not txn_date or not str(txn_date).strip():
+        logger.info("Skipping invoice: TxnDate missing or empty.")
+        return None
+
+    try:
+        # Try YYYY-MM-DD (QBXML standard)
+        txn_dt = datetime.strptime(str(txn_date), "%Y-%m-%d")
+    except ValueError:
+        try:
+            # Fallback to dateutil.parser.isoparse for strict ISO-8601
+            txn_dt = isoparse(str(txn_date))
+        except Exception as e:
+            logger.error(f"Could not parse TxnDate '{txn_date}' as YYYY-MM-DD or ISO: {e}")
+            return None
+
+    # Convert txn_dt to Bermuda (Atlantic/Bermuda) timezone for correct "today" comparison
+    bermuda_tz = timezone("Atlantic/Bermuda")
+    if txn_dt.tzinfo is None:
+        txn_dt = bermuda_tz.localize(txn_dt)
+    else:
+        txn_dt = txn_dt.astimezone(bermuda_tz)
+
+    txn_day = txn_dt.date()
+    bermuda_today = datetime.now(bermuda_tz).date()
+    if txn_day != bermuda_today:
+        logger.info(f"Skipping invoice with TxnDate {txn_day} (not today's date in Bermuda).")
+        return None
+
     # Ensure customer (partner) exists
     customer_name = qb_invoice_data.get("customer_name")
     if not customer_name:
@@ -1395,13 +1429,13 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
                     datetime.strptime(value, "%Y-%m-%d") 
                 except ValueError:
                     logger.warning(f"Date field {qbd_field_name} ('{value}') is not in YYYY-MM-DD format. Odoo might reject.")
-                pass 
-            
+               
             elif odoo_field_name not in ["partner_id", "journal_id", "invoice_line_ids", "move_type", "x_qb_txn_id"]:
                 odoo_credit_memo_payload[odoo_field_name] = value
 
     # Search for existing credit memo in Odoo using QB TxnID
     existing_credit_memo_id = None
+
     if qb_credit_memo_data.get("qb_txn_id"):
         logger.info(f"Searching for existing Odoo credit memo with x_qb_txn_id: {qb_credit_memo_data.get('qb_txn_id')}")
         existing_credit_memos = _odoo_rpc_call(
