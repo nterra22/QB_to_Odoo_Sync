@@ -1524,7 +1524,57 @@ def get_odoo_invoices_created_today():
         kwargs_dict={"fields": fields, "limit": 1000}
     )
     if invoices is None:
-        logger.error("Failed to fetch today's invoices from Odoo.")
+        logger.error("Failed to fetch invoices from Odoo.")
         return []
-    logger.info(f"Fetched {len(invoices)} invoices created today from Odoo.")
-    return invoices
+        
+    logger.info(f"Found {len(invoices)} posted Odoo invoices created today.")
+    
+    # For each invoice, get the details of the invoice lines
+    for invoice in invoices:
+        line_ids = invoice.get('invoice_line_ids', [])
+        if line_ids:
+            # We are interested in lines that are for products, not tax lines etc.
+            line_domain = [('id', 'in', line_ids), ('product_id', '!=', False)]
+            line_fields = ['product_id', 'name', 'quantity', 'price_unit', 'price_subtotal', 'account_id']
+            
+            line_details = _odoo_rpc_call(
+                model='account.move.line',
+                method='search_read',
+                args_list=[line_domain],
+                kwargs_dict={'fields': line_fields}
+            )
+            invoice['invoice_line_details'] = line_details if line_details else []
+        else:
+            invoice['invoice_line_details'] = []
+
+    return invoices if invoices else []
+
+def get_odoo_partner_details(partner_id: int) -> Optional[Dict[str, Any]]:
+    """Fetches detailed information for a single partner."""
+    if not partner_id:
+        return None
+    
+    partner_data = _odoo_rpc_call(
+        model='res.partner',
+        method='read',
+        args_list=[[partner_id]],
+        kwargs_dict={'fields': ['name', 'street', 'city', 'zip', 'state_id', 'country_id', 'phone', 'email']}
+    )
+    if partner_data:
+        return partner_data[0]
+    return None
+
+def get_odoo_item_details(product_id: int) -> Optional[Dict[str, Any]]:
+    """Fetches detailed information for a single product."""
+    if not product_id:
+        return None
+    
+    product_data = _odoo_rpc_call(
+        model='product.product',
+        method='read',
+        args_list=[[product_id]],
+        kwargs_dict={'fields': ['name', 'list_price', 'standard_price', 'description', 'default_code']}
+    )
+    if product_data:
+        return product_data[0]
+    return None

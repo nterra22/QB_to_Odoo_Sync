@@ -653,29 +653,145 @@ class QBWCService(ServiceBase):
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>{max_entries}</MaxReturned>\n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
 
         elif current_task["type"] == QB_ADD_INVOICE:
-            # Import here to avoid circular import
-            from .odoo_service import get_odoo_invoices_created_today
-            from ..utils.data_loader import get_field_mapping
-            from ..utils.qbxml_builder import build_invoice_add_qbxml
+            # Import necessary functions here to avoid circular imports
+            from .odoo_service import get_odoo_invoices_created_today, get_odoo_partner_details, get_odoo_item_details
+            from ..utils.qbxml_builder import build_invoice_add_qbxml, build_customer_add_qbxml, build_item_add_qbxml
 
-            logger.info("Processing QB_ADD_INVOICE task: Fetching today's Odoo invoices and building QBXML requests.")
-            odoo_invoices = get_odoo_invoices_created_today()
-            field_mapping = get_field_mapping()
-            if not odoo_invoices:
-                logger.info("No Odoo invoices created today to send to QuickBooks.")
-                xml_request = ""
-            else:
-                # For simplicity, send only the first invoice in this request (can be expanded to batching)
-                qbxml = build_invoice_add_qbxml(odoo_invoices[0], field_mapping)
-                logger.info(f"Built InvoiceAdd QBXML for Odoo invoice ID {odoo_invoices[0].get('id')}")
-                xml_request = qbxml
+            # State machine for adding an Odoo invoice to QuickBooks
+            # The state is stored in the task itself
+            invoice_sync_state = current_task.get("state", "START")
 
-        # Add other QB_QUERY entity types (Vendor, Item, etc.) here in the future
-        # Add QB_ADD, QB_MOD task types here in the future for Odoo to QB
+            if invoice_sync_state == "START":
+                logger.info("Starting Odoo to QB invoice sync. Fetching invoices created today.")
+                odoo_invoices = get_odoo_invoices_created_today()
+                if not odoo_invoices:
+                    logger.info("No new Odoo invoices to sync.")
+                    # Mark this task as done and let the service move to the next one
+                    session_data["current_task_index"] += 1
+                    save_qbwc_session_state()
+                    return ""
+                
+                # Store the list of invoices to process in the session
+                session_data["invoices_to_sync"] = odoo_invoices
+                session_data["current_invoice_index"] = 0
+                current_task["state"] = "PROCESS_INVOICE"
+                # Fall through to the next state immediately
 
-        logger.debug(f"Sending QBXML request for task type {current_task['type']}, entity {current_task.get('entity', 'N/A')}")
-        logger.info(f"Generated XML request (first 500 chars): {xml_request[:500] if xml_request else 'EMPTY REQUEST'}")
-        return xml_request
+            if current_task.get("state") == "PROCESS_INVOICE":
+                invoice_index = session_data.get("current_invoice_index", 0)
+                invoices_to_sync = session_data.get("invoices_to_sync", [])
+
+                if invoice_index >= len(invoices_to_sync):
+                    logger.info("Finished processing all Odoo invoices.")
+                    session_data["current_task_index"] += 1
+                    save_qbwc_session_state()
+                    return ""
+
+                invoice = invoices_to_sync[invoice_index]
+                current_task["current_invoice_data"] = invoice
+                
+                # State: Check if the customer exists
+                customer_name = invoice.get('partner_id')[1] # Get name from (id, name) tuple
+                logger.info(f"Processing invoice {invoice.get('name')}. Checking if customer '{customer_name}' exists in QB.")
+                
+                current_task["state"] = "AWAIT_CUSTOMER_CHECK"
+                save_qbwc_session_state()
+
+                xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<QBXML>
+<QBXMLMsgsRq onError="stopOnError">
+<CustomerQueryRq requestID="{request_id_str}">
+<FullName>{escape(customer_name)}</FullName>
+</CustomerQueryRq>
+</QBXMLMsgsRq>
+</QBXML>'''
+                return xml_request
+
+            elif current_task.get("state") == "ADD_CUSTOMER":
+                logger.info("Customer not found. Building CustomerAddRq.")
+                customer_id = current_task["current_invoice_data"].get('partner_id')[0]
+                customer_details = get_odoo_partner_details(customer_id)
+                if not customer_details:
+                    logger.error(f"Could not retrieve details for customer ID {customer_id}. Skipping invoice.")
+                    # Skip to next invoice
+                    session_data["current_invoice_index"] += 1
+                    current_task["state"] = "PROCESS_INVOICE"
+                    save_qbwc_session_state()
+                    # This will re-trigger the sendRequestXML for the next invoice in the list
+                    return self.sendRequestXML(ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers)
+
+                xml_request = build_customer_add_qbxml(customer_details)
+                current_task["state"] = "AWAIT_CUSTOMER_ADD"
+                save_qbwc_session_state()
+                return xml_request
+
+            elif current_task.get("state") == "PROCESS_ITEMS":
+                logger.info("Customer confirmed. Processing invoice line items.")
+                invoice_data = current_task["current_invoice_data"]
+                line_items = invoice_data.get("invoice_line_ids", [])
+                
+                # Store items to check in the task
+                current_task["items_to_check"] = line_items
+                current_task["current_item_index"] = 0
+                current_task["state"] = "CHECK_ITEM"
+                # Fall through to CHECK_ITEM state
+
+            if current_task.get("state") == "CHECK_ITEM":
+                item_index = current_task.get("current_item_index", 0)
+                items_to_check = current_task.get("items_to_check", [])
+
+                if item_index >= len(items_to_check):
+                    logger.info("All items checked. Ready to add invoice.")
+                    current_task["state"] = "ADD_INVOICE"
+                    # Fall through to ADD_INVOICE state
+                else:
+                    item = items_to_check[item_index]
+                    item_name = item.get("product_id")[1] # Get name from (id, name) tuple
+                    logger.info(f"Checking if item '{item_name}' exists in QB.")
+                    
+                    current_task["state"] = "AWAIT_ITEM_CHECK"
+                    save_qbwc_session_state()
+
+                    xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<QBXML>
+<QBXMLMsgsRq onError="stopOnError">
+<ItemServiceQueryRq requestID="{request_id_str}">
+<FullName>{escape(item_name)}</FullName>
+</ItemServiceQueryRq>
+</QBXMLMsgsRq>
+</QBXML>'''
+                    return xml_request
+
+            elif current_task.get("state") == "ADD_ITEM":
+                logger.info("Item not found. Building ItemServiceAddRq.")
+                item_index = current_task.get("current_item_index", 0)
+                item_to_add_info = current_task["items_to_check"][item_index]
+                item_id = item_to_add_info.get("product_id")[0]
+                
+                item_details = get_odoo_item_details(item_id)
+                if not item_details:
+                    logger.error(f"Could not retrieve details for item ID {item_id}. Skipping invoice.")
+                    session_data["current_invoice_index"] += 1
+                    current_task["state"] = "PROCESS_INVOICE"
+                    save_qbwc_session_state()
+                    return self.sendRequestXML(ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers)
+
+                xml_request = build_item_add_qbxml(item_details)
+                current_task["state"] = "AWAIT_ITEM_ADD"
+                save_qbwc_session_state()
+                return xml_request
+
+            if current_task.get("state") == "ADD_INVOICE":
+                logger.info("All prerequisites met. Building InvoiceAddRq.")
+                invoice_data = current_task["current_invoice_data"]
+                xml_request = build_invoice_add_qbxml(invoice_data)
+                current_task["state"] = "AWAIT_INVOICE_ADD"
+                save_qbwc_session_state()
+                return xml_request
+        
+        # Fallback for any unhandled state
+        logger.warning(f"Unhandled state '{current_task.get('state')}' in QB_ADD_INVOICE. Ending task.")
+        return ""
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def receiveResponseXML(self, ticket, response, hresult, message):
@@ -1064,7 +1180,6 @@ class QBWCService(ServiceBase):
                         logger.warning("Could not find CreditMemoQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
-                
                 elif entity == SALESORDER_QUERY:
                     sales_order_query_rs = root.find('.//SalesOrderQueryRs')
                     if sales_order_query_rs is not None:
