@@ -989,7 +989,8 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         logger.error("Invoice mapping not found in field_mapping.json. Cannot process invoice.")
         return None
 
-    # Only import invoices created today based on the QBWC-recognized 'TxnDate' field.
+    # Only export one eligible Odoo invoice per sync, regardless of date.
+    # The date filter is removed; process the first invoice found.
     txn_date = qb_invoice_data.get("TxnDate") or qb_invoice_data.get("txn_date")
     logger.debug(f"Raw TxnDate from QB: '{txn_date}' (type: {type(txn_date)})")
 
@@ -997,29 +998,17 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         logger.info("Skipping invoice: TxnDate missing or empty.")
         return None
 
+    # Date parsing is still useful for logging and possible future use, but not for filtering.
     try:
-        # Try YYYY-MM-DD (QBXML standard)
         txn_dt = datetime.strptime(str(txn_date), "%Y-%m-%d")
     except ValueError:
         try:
-            # Fallback to dateutil.parser.isoparse for strict ISO-8601
             txn_dt = isoparse(str(txn_date))
         except Exception as e:
             logger.error(f"Could not parse TxnDate '{txn_date}' as YYYY-MM-DD or ISO: {e}")
             return None
-
-    # Convert txn_dt to Bermuda (Atlantic/Bermuda) timezone for correct "today" comparison
-    bermuda_tz = timezone("Atlantic/Bermuda")
-    if txn_dt.tzinfo is None:
-        txn_dt = bermuda_tz.localize(txn_dt)
-    else:
-        txn_dt = txn_dt.astimezone(bermuda_tz)
-
-    txn_day = txn_dt.date()
-    bermuda_today = datetime.now(bermuda_tz).date()
-    if txn_day != bermuda_today:
-        logger.info(f"Skipping invoice with TxnDate {txn_day} (not today's date in Bermuda).")
-        return None
+    logger.debug(f"Parsed TxnDate: {txn_dt}")
+    # No date-based filtering; proceed to process this invoice.
 
     # Ensure customer (partner) exists
     customer_name = qb_invoice_data.get("customer_name")
@@ -1435,17 +1424,16 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
 
     # Search for existing credit memo in Odoo using QB TxnID
     existing_credit_memo_id = None
-
+    existing_credit_memos = []
     if qb_credit_memo_data.get("qb_txn_id"):
         logger.info(f"Searching for existing Odoo credit memo with x_qb_txn_id: {qb_credit_memo_data.get('qb_txn_id')}")
-        existing_credit_memos = _odoo_rpc_call(
+        result = _odoo_rpc_call(
             model="account.move",
             method="search_read",
             args_list=[[('x_qb_txn_id', '=', qb_credit_memo_data.get('qb_txn_id')), ('move_type', '=', 'out_refund')]],
             kwargs_dict={"fields": ["id"], "limit": 1}
-
         )
-
+        existing_credit_memos = result if result else []
         if existing_credit_memos:
             existing_credit_memo_id = existing_credit_memos[0]["id"]
             logger.info(f"Found existing Odoo credit memo ID: {existing_credit_memo_id} for QB TxnID: {qb_credit_memo_data.get('qb_txn_id')}")
