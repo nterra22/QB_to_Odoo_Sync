@@ -1369,21 +1369,16 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
 
 def get_odoo_invoice_for_sync():
     """
-    Query Odoo for the most recent unsynced invoice.
-    Returns a single invoice dict or None if no unsynced invoices are found.
+    Query Odoo for ANY invoice to test the sync - no filtering requirements.
+    Returns a single invoice dict or None if no invoices are found.
     """
-    domain = [
-        ("move_type", "=", "out_invoice"),
-        ("state", "!=", "cancel"),
-        "|",
-        ("x_qb_txn_id", "=", False),
-        ("x_qb_txn_id", "=", "")
-    ]
+    # Remove ALL filtering - just get any invoice
+    domain = []
     fields = [
         "id", "name", "partner_id", "move_type", "invoice_date", "create_date", "amount_total",
         "invoice_line_ids", "journal_id", "currency_id", "state", "x_qb_txn_id"
     ]
-    logger.info("Querying Odoo for most recent unsynced invoice")
+    logger.info("*** TESTING: Querying Odoo for ANY invoice - no filtering ***")
     logger.debug(f"Search domain: {domain}")
     invoices = _odoo_rpc_call(
         model="account.move",
@@ -1396,25 +1391,11 @@ def get_odoo_invoice_for_sync():
         return None
         
     if not invoices:
-        logger.info("No unsynced invoices found.")
-        # Let's also check how many total invoices exist
-        total_invoices = _odoo_rpc_call(
-            model="account.move",
-            method="search_count",
-            args_list=[[("move_type", "=", "out_invoice")]]
-        )
-        logger.info(f"Total customer invoices in Odoo: {total_invoices}")
-        # Check how many have x_qb_txn_id set
-        synced_invoices = _odoo_rpc_call(
-            model="account.move", 
-            method="search_count",
-            args_list=[[("move_type", "=", "out_invoice"), ("x_qb_txn_id", "!=", False), ("x_qb_txn_id", "!=", "")]]
-        )
-        logger.info(f"Already synced invoices (with x_qb_txn_id): {synced_invoices}")
+        logger.info("No invoices found at all in Odoo.")
         return None
         
     invoice = invoices[0]
-    logger.info(f"Found unsynced invoice: {invoice.get('name')} (ID: {invoice.get('id')})")
+    logger.info(f"*** TESTING: Found ANY invoice: {invoice.get('name')} (ID: {invoice.get('id')}) State: {invoice.get('state')} Type: {invoice.get('move_type')} ***")
     
     # Get the details of the invoice lines
     line_ids = invoice.get('invoice_line_ids', [])

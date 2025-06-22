@@ -438,12 +438,11 @@ class QBWCService(ServiceBase):
             return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
             logger.warning(f"Authentication failed for user: {strUserName}")
-            return ["", "nvu"]
-
-    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
+            return ["", "nvu"]    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         
+        logger.info("*** DEBUG: sendRequestXML function called ***")
         logger.debug("Method sendRequestXML called")
         logger.info(f"sendRequestXML invoked with ticket: {ticket}")
 
@@ -653,6 +652,7 @@ class QBWCService(ServiceBase):
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="{qbxml_version}"?>\n<QBXML>\n  <QBXMLMsgsRq onError="stopOnError">\n    <JournalEntryQueryRq requestID="{request_id_str}">\n      {txn_date_filter_xml}\n      <MaxReturned>{max_entries}</MaxReturned>\n    </JournalEntryQueryRq>\n  </QBXMLMsgsRq>\n</QBXML>'''
 
         elif current_task["type"] == QB_ADD_INVOICE:
+            logger.info("*** DEBUG: QB_ADD_INVOICE task detected ***")
             # Import necessary functions here to avoid circular imports
             from .odoo_service import get_odoo_invoice_for_sync, get_odoo_partner_details, get_odoo_item_details
             from ..utils.qbxml_builder import build_invoice_add_qbxml, build_customer_add_qbxml, build_item_add_qbxml
@@ -660,12 +660,13 @@ class QBWCService(ServiceBase):
             # State machine for adding an Odoo invoice to QuickBooks
             # The state is stored in the task itself
             invoice_sync_state = current_task.get("state", "START")
+            logger.info(f"*** DEBUG: Invoice sync state: {invoice_sync_state} ***")
             
             if invoice_sync_state == "START":
-                logger.info("Starting Odoo to QB invoice sync. Fetching most recent unsynced invoice.")
+                logger.info("*** DEBUG: Starting Odoo to QB invoice sync. Fetching ANY invoice for testing ***")
                 odoo_invoice = get_odoo_invoice_for_sync()
                 if not odoo_invoice:
-                    logger.info("No unsynced Odoo invoices to sync.")
+                    logger.info("*** DEBUG: No invoices found to sync ***")
                     # Mark this task as done and let the service move to the next one
                     session_data["current_task_index"] += 1
                     save_qbwc_session_state()
