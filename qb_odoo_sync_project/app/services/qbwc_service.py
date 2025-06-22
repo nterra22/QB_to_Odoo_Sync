@@ -438,7 +438,9 @@ class QBWCService(ServiceBase):
             return [session_key, ""] # Empty string for company file path, QBWC will fill it
         else:
             logger.warning(f"Authentication failed for user: {strUserName}")
-            return ["", "nvu"]    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
+            return ["", "nvu"]
+
+    @rpc(Unicode, Unicode, Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         
@@ -1391,23 +1393,6 @@ class QBWCService(ServiceBase):
             logger.warning(f"closeConnection: Ticket {ticket} not found")
         
         return "OK"
-
-def _compute_overall_progress(session_data):
-    """
-    Helper function to calculate the overall progress of the sync.
-    """
-    
-    task_queue = session_data.get("task_queue", [])
-    current_task_index = session_data.get("current_task_index", 0)
-    total_tasks = len(task_queue)
-
-    if total_tasks == 0:
-        return 100
-
-    progress = int((current_task_index / total_tasks) * 100)
-    
-    # Ensure progress is capped at 100
-    return min(progress, 100)
 
     @rpc(_returns=Unicode)
     def serverVersion(self):
