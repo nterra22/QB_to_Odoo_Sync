@@ -706,8 +706,7 @@ class QBWCService(ServiceBase):
                     session_data["current_task_index"] += 1
                     save_qbwc_session_state()
                     return ""
-                
-                # State: Check if the customer exists
+                  # State: Check if the customer exists
                 customer_name = invoice.get('partner_id')[1] # Get name from (id, name) tuple
                 logger.info(f"Processing invoice {invoice.get('name')}. Checking if customer '{customer_name}' exists in QB.")
                 
@@ -715,6 +714,7 @@ class QBWCService(ServiceBase):
                 save_qbwc_session_state()
 
                 xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data.get('qbxml_version', '16.0')}"?>
 <QBXML>
 <QBXMLMsgsRq onError="stopOnError">
 <CustomerQueryRq requestID="{request_id_str}">
@@ -750,7 +750,7 @@ class QBWCService(ServiceBase):
                 current_task["current_item_index"] = 0
                 current_task["state"] = "CHECK_ITEM"
                 # Fall through to CHECK_ITEM state
-
+                    
             if current_task.get("state") == "CHECK_ITEM":
                 item_index = current_task.get("current_item_index", 0)
                 items_to_check = current_task.get("items_to_check", [])
@@ -768,6 +768,7 @@ class QBWCService(ServiceBase):
                     save_qbwc_session_state()
 
                     xml_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="{session_data.get('qbxml_version', '16.0')}"?>
 <QBXML>
 <QBXMLMsgsRq onError="stopOnError">
 <ItemServiceQueryRq requestID="{request_id_str}">
