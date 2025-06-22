@@ -1384,6 +1384,7 @@ def get_odoo_invoice_for_sync():
         "invoice_line_ids", "journal_id", "currency_id", "state", "x_qb_txn_id"
     ]
     logger.info("Querying Odoo for most recent unsynced invoice")
+    logger.debug(f"Search domain: {domain}")
     invoices = _odoo_rpc_call(
         model="account.move",
         method="search_read",
@@ -1396,6 +1397,20 @@ def get_odoo_invoice_for_sync():
         
     if not invoices:
         logger.info("No unsynced invoices found.")
+        # Let's also check how many total invoices exist
+        total_invoices = _odoo_rpc_call(
+            model="account.move",
+            method="search_count",
+            args_list=[[("move_type", "=", "out_invoice")]]
+        )
+        logger.info(f"Total customer invoices in Odoo: {total_invoices}")
+        # Check how many have x_qb_txn_id set
+        synced_invoices = _odoo_rpc_call(
+            model="account.move", 
+            method="search_count",
+            args_list=[[("move_type", "=", "out_invoice"), ("x_qb_txn_id", "!=", False), ("x_qb_txn_id", "!=", "")]]
+        )
+        logger.info(f"Already synced invoices (with x_qb_txn_id): {synced_invoices}")
         return None
         
     invoice = invoices[0]
@@ -1419,58 +1434,6 @@ def get_odoo_invoice_for_sync():
         invoice['invoice_line_details'] = []
 
     return invoice
-
-def get_odoo_invoices_created_today():
-    """
-    Query Odoo for invoices created today using the system’s local date.
-    Returns a list of invoice dicts.
-    """
-    from datetime import datetime, date
-    today = date.today()
-    today_start = datetime.combine(today, datetime.min.time())
-    today_end = datetime.combine(today, datetime.max.time())
-
-    domain = [
-        ("create_date", ">=", today_start.strftime("%Y-%m-%d %H:%M:%S")),
-        ("create_date", "<=", today_end.strftime("%Y-%m-%d %H:%M:%S")),
-        ("state", "!=", "cancel"),
-    ]
-    fields = [
-        "id", "name", "partner_id", "move_type", "invoice_date", "create_date", "amount_total",
-        "invoice_line_ids", "journal_id", "currency_id", "state"
-    ]
-    logger.info(f"Querying Odoo for today's invoices: {today_start} to {today_end}")
-    invoices = _odoo_rpc_call(
-        model="account.move",
-        method="search_read",
-        args_list=[domain],
-        kwargs_dict={"fields": fields, "limit": 1000}
-    )
-    if invoices is None:
-        logger.error("Failed to fetch invoices from Odoo.")
-        return []
-        
-    logger.info(f"Found {len(invoices)} posted Odoo invoices created today.")
-    
-    # For each invoice, get the details of the invoice lines
-    for invoice in invoices:
-        line_ids = invoice.get('invoice_line_ids', [])
-        if line_ids:
-            # We are interested in lines that are for products, not tax lines etc.
-            line_domain = [('id', 'in', line_ids), ('product_id', '!=', False)]
-            line_fields = ['product_id', 'name', 'quantity', 'price_unit', 'price_subtotal', 'account_id']
-            
-            line_details = _odoo_rpc_call(
-                model='account.move.line',
-                method='search_read',
-                args_list=[line_domain],
-                kwargs_dict={'fields': line_fields}
-            )
-            invoice['invoice_line_details'] = line_details if line_details else []
-        else:
-            invoice['invoice_line_details'] = []
-
-    return invoices if invoices else []
 
 def get_odoo_partner_details(partner_id: int) -> Optional[Dict[str, Any]]:
     """Fetches detailed information for a single partner."""
