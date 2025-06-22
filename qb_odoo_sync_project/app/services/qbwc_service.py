@@ -654,41 +654,35 @@ class QBWCService(ServiceBase):
 
         elif current_task["type"] == QB_ADD_INVOICE:
             # Import necessary functions here to avoid circular imports
-            from .odoo_service import get_odoo_invoices_created_today, get_odoo_partner_details, get_odoo_item_details
+            from .odoo_service import get_odoo_invoice_for_sync, get_odoo_partner_details, get_odoo_item_details
             from ..utils.qbxml_builder import build_invoice_add_qbxml, build_customer_add_qbxml, build_item_add_qbxml
 
             # State machine for adding an Odoo invoice to QuickBooks
             # The state is stored in the task itself
             invoice_sync_state = current_task.get("state", "START")
-
+            
             if invoice_sync_state == "START":
-                logger.info("Starting Odoo to QB invoice sync. Fetching invoices created today.")
-                odoo_invoices = get_odoo_invoices_created_today()
-                if not odoo_invoices:
-                    logger.info("No new Odoo invoices to sync.")
+                logger.info("Starting Odoo to QB invoice sync. Fetching most recent unsynced invoice.")
+                odoo_invoice = get_odoo_invoice_for_sync()
+                if not odoo_invoice:
+                    logger.info("No unsynced Odoo invoices to sync.")
                     # Mark this task as done and let the service move to the next one
                     session_data["current_task_index"] += 1
                     save_qbwc_session_state()
                     return ""
                 
-                # Store the list of invoices to process in the session
-                session_data["invoices_to_sync"] = odoo_invoices
-                session_data["current_invoice_index"] = 0
+                # Store the single invoice to process in the session
+                current_task["current_invoice_data"] = odoo_invoice
                 current_task["state"] = "PROCESS_INVOICE"
                 # Fall through to the next state immediately
 
             if current_task.get("state") == "PROCESS_INVOICE":
-                invoice_index = session_data.get("current_invoice_index", 0)
-                invoices_to_sync = session_data.get("invoices_to_sync", [])
-
-                if invoice_index >= len(invoices_to_sync):
-                    logger.info("Finished processing all Odoo invoices.")
+                invoice = current_task.get("current_invoice_data")
+                if not invoice:
+                    logger.error("No invoice data found in current task.")
                     session_data["current_task_index"] += 1
                     save_qbwc_session_state()
                     return ""
-
-                invoice = invoices_to_sync[invoice_index]
-                current_task["current_invoice_data"] = invoice
                 
                 # State: Check if the customer exists
                 customer_name = invoice.get('partner_id')[1] # Get name from (id, name) tuple
@@ -712,23 +706,21 @@ class QBWCService(ServiceBase):
                 customer_id = current_task["current_invoice_data"].get('partner_id')[0]
                 customer_details = get_odoo_partner_details(customer_id)
                 if not customer_details:
-                    logger.error(f"Could not retrieve details for customer ID {customer_id}. Skipping invoice.")
-                    # Skip to next invoice
-                    session_data["current_invoice_index"] += 1
-                    current_task["state"] = "PROCESS_INVOICE"
+                    logger.error(f"Could not retrieve details for customer ID {customer_id}. Skipping this sync session.")
+                    # Mark this task as done since we can't process this invoice
+                    session_data["current_task_index"] += 1
                     save_qbwc_session_state()
-                    # This will re-trigger the sendRequestXML for the next invoice in the list
-                    return self.sendRequestXML(ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers)
+                    return ""
 
                 xml_request = build_customer_add_qbxml(customer_details)
                 current_task["state"] = "AWAIT_CUSTOMER_ADD"
                 save_qbwc_session_state()
                 return xml_request
-
+                
             elif current_task.get("state") == "PROCESS_ITEMS":
                 logger.info("Customer confirmed. Processing invoice line items.")
                 invoice_data = current_task["current_invoice_data"]
-                line_items = invoice_data.get("invoice_line_ids", [])
+                line_items = invoice_data.get("invoice_line_details", [])
                 
                 # Store items to check in the task
                 current_task["items_to_check"] = line_items
@@ -770,11 +762,11 @@ class QBWCService(ServiceBase):
                 
                 item_details = get_odoo_item_details(item_id)
                 if not item_details:
-                    logger.error(f"Could not retrieve details for item ID {item_id}. Skipping invoice.")
-                    session_data["current_invoice_index"] += 1
-                    current_task["state"] = "PROCESS_INVOICE"
+                    logger.error(f"Could not retrieve details for item ID {item_id}. Skipping this sync session.")
+                    # Mark this task as done since we can't process this invoice
+                    session_data["current_task_index"] += 1
                     save_qbwc_session_state()
-                    return self.sendRequestXML(ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers)
+                    return ""
 
                 xml_request = build_item_add_qbxml(item_details)
                 current_task["state"] = "AWAIT_ITEM_ADD"
@@ -788,9 +780,10 @@ class QBWCService(ServiceBase):
                 current_task["state"] = "AWAIT_INVOICE_ADD"
                 save_qbwc_session_state()
                 return xml_request
-        
-        # Fallback for any unhandled state
+          # Fallback for any unhandled state
         logger.warning(f"Unhandled state '{current_task.get('state')}' in QB_ADD_INVOICE. Ending task.")
+        session_data["current_task_index"] += 1
+        save_qbwc_session_state()
         return ""
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Unicode)
@@ -1218,7 +1211,7 @@ class QBWCService(ServiceBase):
                                 active_task["iteratorID"] = None
                                 session_data["current_task_index"] += 1
                         else:
-                            logger.error(f"SalesOrderQueryRs failed: {status_message}")
+                            logger.error(f"SalesOrderQueryRs failed with statusCode: {status_code}, message: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
                     else:

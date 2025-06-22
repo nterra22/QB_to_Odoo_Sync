@@ -1497,6 +1497,59 @@ def create_or_update_odoo_credit_memo(qb_credit_memo_data: Dict[str, Any]) -> Op
             logger.error(f"Failed to create Odoo credit memo for QB Ref: {qb_credit_memo_data.get('ref_number')}")
             return None
 
+def get_odoo_invoice_for_sync():
+    """
+    Query Odoo for the most recent unsynced invoice.
+    Returns a single invoice dict or None if no unsynced invoices are found.
+    """
+    domain = [
+        ("move_type", "=", "out_invoice"),
+        ("state", "!=", "cancel"),
+        "|",
+        ("x_qb_txn_id", "=", False),
+        ("x_qb_txn_id", "=", "")
+    ]
+    fields = [
+        "id", "name", "partner_id", "move_type", "invoice_date", "create_date", "amount_total",
+        "invoice_line_ids", "journal_id", "currency_id", "state", "x_qb_txn_id"
+    ]
+    logger.info("Querying Odoo for most recent unsynced invoice")
+    invoices = _odoo_rpc_call(
+        model="account.move",
+        method="search_read",
+        args_list=[domain],
+        kwargs_dict={"fields": fields, "limit": 1, "order": "create_date desc"}
+    )
+    if invoices is None:
+        logger.error("Failed to fetch invoices from Odoo.")
+        return None
+        
+    if not invoices:
+        logger.info("No unsynced invoices found.")
+        return None
+        
+    invoice = invoices[0]
+    logger.info(f"Found unsynced invoice: {invoice.get('name')} (ID: {invoice.get('id')})")
+    
+    # Get the details of the invoice lines
+    line_ids = invoice.get('invoice_line_ids', [])
+    if line_ids:
+        # We are interested in lines that are for products, not tax lines etc.
+        line_domain = [('id', 'in', line_ids), ('product_id', '!=', False)]
+        line_fields = ['product_id', 'name', 'quantity', 'price_unit', 'price_subtotal', 'account_id']
+        
+        line_details = _odoo_rpc_call(
+            model='account.move.line',
+            method='search_read',
+            args_list=[line_domain],
+            kwargs_dict={'fields': line_fields}
+        )
+        invoice['invoice_line_details'] = line_details if line_details else []
+    else:
+        invoice['invoice_line_details'] = []
+
+    return invoice
+
 def get_odoo_invoices_created_today():
     """
     Query Odoo for invoices created today using the system’s local date.
