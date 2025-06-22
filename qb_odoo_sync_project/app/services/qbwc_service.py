@@ -395,30 +395,31 @@ class QBWCService(ServiceBase):
             session_key = f"ticket_{int(datetime.now().timestamp())}_{strUserName}"
             
             initial_tasks = [
-                {
-                    "type": QB_QUERY, 
-                    "entity": CUSTOMER_QUERY, 
-                    "requestID": "1",
-                    "iteratorID": None,
-                    "params": { 
-                        "ModifiedDateRangeFilter": { # Keep this for customers
-                            "FromModifiedDate": "1980-01-01" 
-                        }
-                    }
-                },
-                {
-                    "type": QB_QUERY,
-                    "entity": INVOICE_QUERY,
-                    "requestID": "2",
-                    "iteratorID": None,
-                    "params": {
-                        "IncludeLineItems": "true"
-                    }
-                },
+                # TEMPORARILY REMOVE THE QUERY TASKS TO FOCUS ON INVOICE EXPORT
+                # {
+                #     "type": QB_QUERY, 
+                #     "entity": CUSTOMER_QUERY, 
+                #     "requestID": "1",
+                #     "iteratorID": None,
+                #     "params": { 
+                #         "ModifiedDateRangeFilter": { # Keep this for customers
+                #             "FromModifiedDate": "1980-01-01" 
+                #         }
+                #     }
+                # },
+                # {
+                #     "type": QB_QUERY,
+                #     "entity": INVOICE_QUERY,
+                #     "requestID": "2",
+                #     "iteratorID": None,
+                #     "params": {
+                #         "IncludeLineItems": "true"
+                #     }
+                # },
                 {
                     "type": QB_ADD_INVOICE,
                     "entity": "InvoiceAdd",
-                    "requestID": "3",
+                    "requestID": "1",  # Changed to 1 since it's now the first task
                     "iteratorID": None,
                     "params": {}
                 }
@@ -435,8 +436,7 @@ class QBWCService(ServiceBase):
             }
             save_qbwc_session_state()
             
-            return [session_key, ""] # Empty string for company file path, QBWC will fill it
-        else:
+            return [session_key, ""] # Empty string for company file path, QBWC will fill it        else:
             logger.warning(f"Authentication failed for user: {strUserName}")
             return ["", "nvu"]
 
@@ -444,12 +444,17 @@ class QBWCService(ServiceBase):
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, 
                       qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         
+        # First thing - log to both console and file to ensure we see this
+        print("=== SENDREQUEST XML CALLED ===")
+        logger.info("=== SENDREQUEST XML CALLED ===")
         logger.info("*** DEBUG: sendRequestXML function called ***")
         logger.debug("Method sendRequestXML called")
         logger.info(f"sendRequestXML invoked with ticket: {ticket}")
+        print(f"sendRequestXML invoked with ticket: {ticket}")
 
         session_data = qbwc_session_state.get(ticket)
         logger.info(f"sendRequestXML: Retrieved session_data exists: {session_data is not None}")
+        print(f"sendRequestXML: Retrieved session_data exists: {session_data is not None}")
 
         if not session_data:
             logger.error(f"sendRequestXML: Invalid ticket {ticket}. No session data found.")
@@ -665,14 +670,29 @@ class QBWCService(ServiceBase):
             logger.info(f"*** DEBUG: Invoice sync state: {invoice_sync_state} ***")
             
             if invoice_sync_state == "START":
+                print("=== TRYING TO GET INVOICE FROM ODOO ===")
                 logger.info("*** DEBUG: Starting Odoo to QB invoice sync. Fetching ANY invoice for testing ***")
-                odoo_invoice = get_odoo_invoice_for_sync()
+                logger.info("=== CALLING get_odoo_invoice_for_sync() ===")
+                
+                try:
+                    odoo_invoice = get_odoo_invoice_for_sync()
+                    print(f"=== GOT INVOICE: {odoo_invoice} ===")
+                    logger.info(f"=== GOT INVOICE FROM ODOO: {odoo_invoice} ===")
+                except Exception as e:
+                    print(f"=== ERROR GETTING INVOICE: {e} ===")
+                    logger.error(f"=== ERROR GETTING INVOICE: {e} ===")
+                    odoo_invoice = None
+                
                 if not odoo_invoice:
+                    print("=== NO INVOICES FOUND ===")
                     logger.info("*** DEBUG: No invoices found to sync ***")
                     # Mark this task as done and let the service move to the next one
                     session_data["current_task_index"] += 1
                     save_qbwc_session_state()
                     return ""
+                
+                print(f"=== FOUND INVOICE: {odoo_invoice.get('name', 'NO NAME')} ===")
+                logger.info(f"=== FOUND INVOICE: {odoo_invoice.get('name', 'NO NAME')} ===")
                 
                 # Store the single invoice to process in the session
                 current_task["current_invoice_data"] = odoo_invoice
