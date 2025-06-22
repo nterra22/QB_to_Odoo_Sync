@@ -1445,3 +1445,42 @@ def get_odoo_item_details(product_id: int) -> Optional[Dict[str, Any]]:
     if product_data:
         return product_data[0]
     return None
+
+def mark_invoice_as_synced(invoice_id: int, qb_txn_id: str, qb_ref_number: str = None) -> bool:
+    """
+    Marks an Odoo invoice as synced to QuickBooks by updating custom fields.
+    
+    Args:
+        invoice_id: The Odoo invoice ID
+        qb_txn_id: The QuickBooks TxnID
+        qb_ref_number: The QuickBooks RefNumber (optional)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        update_data = {
+            'x_qb_txn_id': qb_txn_id,
+            'x_qb_synced': True,
+            'x_qb_sync_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        if qb_ref_number:
+            update_data['x_qb_ref_number'] = qb_ref_number
+        
+        result = _odoo_rpc_call(
+            model='account.move',
+            method='write',
+            args_list=[[invoice_id], update_data]
+        )
+        
+        if result:
+            logger.info(f"Successfully marked invoice {invoice_id} as synced with QB TxnID: {qb_txn_id}")
+            return True
+        else:
+            logger.error(f"Failed to mark invoice {invoice_id} as synced")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error marking invoice {invoice_id} as synced: {e}", exc_info=True)
+        return False

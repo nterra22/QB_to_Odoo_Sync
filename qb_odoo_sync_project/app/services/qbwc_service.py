@@ -1329,10 +1329,135 @@ class QBWCService(ServiceBase):
                             logger.error(f"JournalEntryQueryRs failed: {status_message}")
                             active_task["iteratorID"] = None
                             session_data["current_task_index"] += 1
-                    else:
                         logger.warning("Could not find JournalEntryQueryRs in response.")
                         active_task["iteratorID"] = None
                         session_data["current_task_index"] += 1
+
+            elif active_task["type"] == QB_ADD_INVOICE:
+                # Handle QB_ADD_INVOICE state machine responses
+                logger.info(f"Processing QB_ADD_INVOICE response. Current state: {active_task.get('state')}")
+                
+                if active_task.get("state") == "AWAIT_CUSTOMER_CHECK":
+                    # We sent a CustomerQueryRq to check if customer exists
+                    customer_query_rs = root.find('.//CustomerQueryRs')
+                    if customer_query_rs is not None:
+                        status_code = customer_query_rs.get('statusCode', 'unknown')
+                        status_message = customer_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"Customer check result: {status_code} - {status_message}")
+                        
+                        if status_code == '0':
+                            # Customer exists, proceed to check items
+                            customers = customer_query_rs.findall('.//CustomerRet')
+                            if customers:
+                                logger.info("Customer found in QuickBooks. Moving to item processing.")
+                                active_task["state"] = "PROCESS_ITEMS"
+                            else:
+                                logger.info("Customer not found in QuickBooks. Need to add customer first.")
+                                active_task["state"] = "ADD_CUSTOMER"
+                        else:
+                            # Customer doesn't exist or error occurred, need to add customer
+                            logger.info(f"Customer check failed ({status_code}). Will add customer first.")
+                            active_task["state"] = "ADD_CUSTOMER"
+                    
+                elif active_task.get("state") == "AWAIT_CUSTOMER_ADD":
+                    # We sent a CustomerAddRq
+                    customer_add_rs = root.find('.//CustomerAddRs')
+                    if customer_add_rs is not None:
+                        status_code = customer_add_rs.get('statusCode', 'unknown')
+                        status_message = customer_add_rs.get('statusMessage', 'N/A')
+                        logger.info(f"Customer add result: {status_code} - {status_message}")
+                        
+                        if status_code == '0':
+                            logger.info("Customer successfully added to QuickBooks. Moving to item processing.")
+                            active_task["state"] = "PROCESS_ITEMS"
+                        else:
+                            logger.error(f"Failed to add customer to QuickBooks: {status_message}")
+                            session_data["last_error"] = f"Customer add failed: {status_message}"
+                            session_data["current_task_index"] += 1
+                            save_qbwc_session_state()
+                            return "0"
+                
+                elif active_task.get("state") == "AWAIT_ITEM_CHECK":
+                    # We sent an ItemServiceQueryRq to check if item exists
+                    item_query_rs = root.find('.//ItemServiceQueryRs')
+                    if item_query_rs is not None:
+                        status_code = item_query_rs.get('statusCode', 'unknown')
+                        status_message = item_query_rs.get('statusMessage', 'N/A')
+                        logger.info(f"Item check result: {status_code} - {status_message}")
+                        
+                        if status_code == '0':
+                            # Item exists, move to next item or add invoice
+                            items = item_query_rs.findall('.//ItemServiceRet')
+                            if items:
+                                logger.info("Item found in QuickBooks. Moving to next item.")
+                                active_task["current_item_index"] = active_task.get("current_item_index", 0) + 1
+                                active_task["state"] = "CHECK_ITEM"
+                            else:
+                                logger.info("Item not found in QuickBooks. Need to add item first.")
+                                active_task["state"] = "ADD_ITEM"
+                        else:
+                            # Item doesn't exist, need to add it
+                            logger.info(f"Item check failed ({status_code}). Will add item first.")
+                            active_task["state"] = "ADD_ITEM"
+                
+                elif active_task.get("state") == "AWAIT_ITEM_ADD":
+                    # We sent an ItemServiceAddRq
+                    item_add_rs = root.find('.//ItemServiceAddRs')
+                    if item_add_rs is not None:
+                        status_code = item_add_rs.get('statusCode', 'unknown')
+                        status_message = item_add_rs.get('statusMessage', 'N/A')
+                        logger.info(f"Item add result: {status_code} - {status_message}")
+                        
+                        if status_code == '0':
+                            logger.info("Item successfully added to QuickBooks. Moving to next item.")
+                            active_task["current_item_index"] = active_task.get("current_item_index", 0) + 1
+                            active_task["state"] = "CHECK_ITEM"
+                        else:
+                            logger.error(f"Failed to add item to QuickBooks: {status_message}")
+                            session_data["last_error"] = f"Item add failed: {status_message}"
+                            session_data["current_task_index"] += 1
+                            save_qbwc_session_state()
+                            return "0"
+                
+                elif active_task.get("state") == "AWAIT_INVOICE_ADD":
+                    # We sent an InvoiceAddRq
+                    invoice_add_rs = root.find('.//InvoiceAddRs')
+                    if invoice_add_rs is not None:
+                        status_code = invoice_add_rs.get('statusCode', 'unknown')
+                        status_message = invoice_add_rs.get('statusMessage', 'N/A')
+                        logger.info(f"Invoice add result: {status_code} - {status_message}")
+                        
+                        if status_code == '0':
+                            # Successfully added invoice to QuickBooks
+                            invoice_ret = invoice_add_rs.find('.//InvoiceRet')
+                            if invoice_ret is not None:
+                                qb_txn_id = _get_xml_text(invoice_ret.find('TxnID'))
+                                ref_number = _get_xml_text(invoice_ret.find('RefNumber'))
+                                logger.info(f"Invoice successfully added to QuickBooks. TxnID: {qb_txn_id}, RefNumber: {ref_number}")
+                                
+                                # Mark the Odoo invoice as synced
+                                invoice_data = active_task.get("current_invoice_data")
+                                if invoice_data:
+                                    try:
+                                        from .odoo_service import mark_invoice_as_synced
+                                        mark_invoice_as_synced(invoice_data.get('id'), qb_txn_id, ref_number)
+                                        logger.info(f"Marked Odoo invoice {invoice_data.get('name')} as synced with QB TxnID: {qb_txn_id}")
+                                    except Exception as e:
+                                        logger.error(f"Failed to mark Odoo invoice as synced: {e}", exc_info=True)
+                            
+                            # Move to next task
+                            session_data["current_task_index"] += 1
+                            save_qbwc_session_state()
+                        else:
+                            logger.error(f"Failed to add invoice to QuickBooks: {status_message}")
+                            session_data["last_error"] = f"Invoice add failed: {status_message}"
+                            session_data["current_task_index"] += 1
+                            save_qbwc_session_state()
+                            return "0"
+                else:
+                    logger.warning(f"Unhandled QB_ADD_INVOICE state: {active_task.get('state')}")
+                    session_data["current_task_index"] += 1
+                    save_qbwc_session_state()
 
         except ET.ParseError as e:
             logger.error(f"Error parsing XML response for task {active_task}: {e}. Response snippet: {response[:500] if response else 'Empty'}")
