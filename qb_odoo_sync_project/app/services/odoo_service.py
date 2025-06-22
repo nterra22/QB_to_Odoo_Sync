@@ -989,170 +989,77 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         logger.error("Invoice mapping not found in field_mapping.json. Cannot process invoice.")
         return None
 
-    # Only export one eligible Odoo invoice per sync, regardless of date.
-    # The date filter is removed; process the first invoice found.
-    txn_date = qb_invoice_data.get("TxnDate") or qb_invoice_data.get("txn_date")
-    logger.debug(f"Raw TxnDate from QB: '{txn_date}' (type: {type(txn_date)})")
-
-    if not txn_date or not str(txn_date).strip():
-        logger.info("Skipping invoice: TxnDate missing or empty.")
-        return None
-
-    # Date parsing is still useful for logging and possible future use, but not for filtering.
-    try:
-        txn_dt = datetime.strptime(str(txn_date), "%Y-%m-%d")
-    except ValueError:
-        try:
-            txn_dt = isoparse(str(txn_date))
-        except Exception as e:
-            logger.error(f"Could not parse TxnDate '{txn_date}' as YYYY-MM-DD or ISO: {e}")
-            return None
-    logger.debug(f"Parsed TxnDate: {txn_dt}")
-    # No date-based filtering; proceed to process this invoice.
-
-    # Ensure customer (partner) exists
+    # No TxnDate filtering at all. Only require customer, lines, and journal.
     customer_name = qb_invoice_data.get("customer_name")
     if not customer_name:
-        logger.error("Customer name missing from QB invoice data.")
+        logger.error("Customer name missing from QB invoice data. Skipping invoice.")
         return None
-    
     odoo_partner_id = ensure_partner_exists(name=customer_name, is_customer=True, is_supplier=False)
     if not odoo_partner_id:
-        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}. Invoice will be skipped. Please check Odoo partner creation logic and logs for details.")
+        logger.error(f"Failed to ensure Odoo partner for customer: {customer_name}. Invoice will be skipped.")
         return None
 
-    # Determine Odoo journal
-    # This might come from config or be a fixed value based on company setup
-    # For now, let's assume a default journal name from field_mapping.json or hardcode
     default_journal_name = invoice_mapping.get("default_values", {}).get("journal_name", "Customer Invoices")
     sales_journal_id = ensure_journal_exists(default_journal_name)
     if not sales_journal_id:
-        # Fallback: Try to find any sales journal if the default one is not found
-        logger.warning(f"Default sales journal '{default_journal_name}' not found. Trying to find any sales journal.")
-        journals = _odoo_rpc_call(
-            "account.journal",
-            "search_read",
-            args_list=[[('type', '=', 'sale')]],
-            kwargs_dict={"fields": ["id", "name"], "limit": 1} # Added name to log which journal is used
-        )
-        if journals:
-            sales_journal_id = journals[0]["id"]
-            logger.info(f"Found sales journal '{journals[0].get('name', 'ID: '+str(sales_journal_id))}' to use.") # Log the name
-        else:
-            logger.error(f"Sales journal '{default_journal_name}' not found in Odoo, and no other sales journal available. Cannot create invoice.")
-            return None
+        logger.error(f"Sales journal '{default_journal_name}' not found. Cannot create invoice.")
+        return None
 
-    # Prepare invoice lines
     invoice_lines_for_odoo = []
     for qb_line in qb_invoice_data.get("lines", []):
         product_id = None
-        item_name = qb_line.get("item_name") # QBD Item Name (might be FullName)
-        
+        item_name = qb_line.get("item_name")
         if item_name:
-            # Attempt to find product by name (or default_code if mapping implies that)
             product_id = ensure_product_exists(model_code=item_name, description=qb_line.get("description", item_name))
-            if not product_id:
-                logger.warning(f"Could not ensure Odoo product for QB item '{item_name}'. Line description: '{qb_line.get('description')}'. Invoice line may be incomplete or use a generic product.")
-                # TODO: Fallback to a generic "Sales" product or similar if configured
-
-        # Determine account for the line. This is crucial.
-        # Priority: 1. QB Line Account, 2. Item's Income Account (from QB, mapped), 3. Default Sales/Income Account
-        line_account_name_qb = qb_line.get("account_name") # If QB provides account at line level (e.g. for non-item lines)
+        line_account_name_qb = qb_line.get("account_name")
         odoo_line_account_id = None
-
         if line_account_name_qb:
             odoo_line_account_id = ensure_account_exists(line_account_name_qb, account_type_hint="income")
-        elif product_id: # If product exists, try to get its income account from Odoo product.template
+        elif product_id:
             product_template_info = _odoo_rpc_call(
                 "product.product", "read", args_list=[product_id], kwargs_dict={"fields": ["property_account_income_id", "product_tmpl_id"]}
             )
             if product_template_info and product_template_info[0].get("property_account_income_id"):
-                odoo_line_account_id = product_template_info[0]["property_account_income_id"][0] # It's a tuple (id, name)
-            elif product_template_info and product_template_info[0].get("product_tmpl_id"): # Check template
-                 template_id = product_template_info[0]["product_tmpl_id"][0]
-                 template_info_full = _odoo_rpc_call(
+                odoo_line_account_id = product_template_info[0]["property_account_income_id"][0]
+            elif product_template_info and product_template_info[0].get("product_tmpl_id"):
+                template_id = product_template_info[0]["product_tmpl_id"][0]
+                template_info_full = _odoo_rpc_call(
                     "product.template", "read", args_list=[template_id], kwargs_dict={"fields": ["property_account_income_id"]}
-                 )
-                 if template_info_full and template_info_full[0].get("property_account_income_id"):
-                     odoo_line_account_id = template_info_full[0]["property_account_income_id"][0]
-
-
+                )
+                if template_info_full and template_info_full[0].get("property_account_income_id"):
+                    odoo_line_account_id = template_info_full[0]["property_account_income_id"][0]
         if not odoo_line_account_id:
-            # Fallback to a default income account if no specific account found
-            # This default should ideally be configurable or derived from journal
-            default_income_account_name = "Sales" # Placeholder, should be from config or account_crosswalk
-            logger.warning(f"Income account for line '{qb_line.get('description', item_name)}' not determined. Falling back to default '{default_income_account_name}'.")
-            odoo_line_account_id = ensure_account_exists(default_income_account_name, account_type_hint="income")
-
+            odoo_line_account_id = ensure_account_exists("Sales", account_type_hint="income")
         if not odoo_line_account_id:
-            logger.error(f"Failed to determine or create income account for invoice line: '{qb_line.get('description', item_name)}'. Skipping line.")
-            continue # Skip this line if account cannot be resolved
-
+            logger.error(f"No income account for invoice line: '{qb_line.get('description', item_name)}'. Skipping line.")
+            continue
         line_data = {
             "product_id": product_id,
             "name": qb_line.get("description") or item_name or "N/A",
             "quantity": qb_line.get("quantity", 0.0),
             "price_unit": qb_line.get("rate", 0.0),
             "account_id": odoo_line_account_id,
-            # "tax_ids": [] # Placeholder for tax mapping - complex, requires tax service
         }
-        
-        # TODO: Tax mapping. This is highly dependent on how taxes are set up in QB and Odoo.
-        # qb_tax_code_ref = qb_line.get("tax_code_ref_full_name")
-        # if qb_tax_code_ref:
-        #   odoo_tax_ids = map_qb_tax_to_odoo(qb_tax_code_ref) # This function would need to be created
-        #   if odoo_tax_ids:
-        #       line_data["tax_ids"] = [(6, 0, odoo_tax_ids)]
-
         invoice_lines_for_odoo.append((0, 0, line_data))
+    if not invoice_lines_for_odoo:
+        logger.error("No valid lines for invoice. Skipping.")
+        return None
 
-    if not invoice_lines_for_odoo and qb_invoice_data.get("lines"): # Only warn if there were lines to process
-        logger.warning(f"No lines could be processed for QB Invoice Ref {qb_invoice_data.get('ref_number')}. Invoice will not be created/updated if it has no lines.")
-        # Depending on Odoo rules, an invoice with no lines might not be allowed.
-        # For now, we'll let it try, Odoo will reject if invalid.
-
-    # Prepare Odoo invoice payload using field_mapping.json
     odoo_invoice_payload = {
         "move_type": invoice_mapping.get("default_values", {}).get("move_type", "out_invoice"),
         "partner_id": odoo_partner_id,
         "journal_id": sales_journal_id,
         "invoice_line_ids": invoice_lines_for_odoo,
-        # Add a custom field to store QB TxnID for future updates and preventing duplicates
-        # This field needs to be created in Odoo on 'account.move' model (e.g., x_qb_txn_id)
-        "x_qb_txn_id": qb_invoice_data.get("qb_txn_id") 
+        "x_qb_txn_id": qb_invoice_data.get("qb_txn_id")
     }
-
-    # Map fields from qb_invoice_data to odoo_invoice_payload based on field_mapping
     for mapping_item in invoice_mapping.get("fields", []):
         qbd_field_name = mapping_item["qbd_field"]
         odoo_field_name = mapping_item["odoo_field"]
+        if qbd_field_name in qb_invoice_data and odoo_field_name not in ["partner_id", "journal_id", "invoice_line_ids", "move_type", "x_qb_txn_id"]:
+            odoo_invoice_payload[odoo_field_name] = qb_invoice_data[qbd_field_name]
 
-        if qbd_field_name in qb_invoice_data:
-            value = qb_invoice_data[qbd_field_name]
-            # Basic transformations can be added here if needed (e.g., date formatting)
-            if "date" in odoo_field_name and isinstance(value, str): # Ensure date format if necessary
-                try:
-                    # Assuming QB dates are YYYY-MM-DD. If not, parse and reformat.
-                    datetime.strptime(value, "%Y-%m-%d") 
-                except ValueError:
-                    logger.warning(f"Date field {qbd_field_name} ('{value}') is not in YYYY-MM-DD format. Odoo might reject.")
-                # Add a pass statement here if no other action is needed in the try block after strptime
-                # or if the intention was just to validate. If strptime fails, the except block handles it.
-                pass 
-            
-            # Handle special cases like TermsRef_ListID mapping to invoice_payment_term_id
-            if qbd_field_name == "TermsRef_ListID" and odoo_field_name == "invoice_payment_term_id":
-                # This requires fetching Odoo's payment term ID based on QB's term name/ListID
-                # For now, this is a placeholder. A robust solution needs a term mapping utility.
-                pass  # Placeholder for term mapping
-
-            elif odoo_field_name not in ["partner_id", "journal_id", "invoice_line_ids", "move_type", "x_qb_txn_id"]:
-                odoo_invoice_payload[odoo_field_name] = value
-
-    # Search for existing invoice in Odoo using QB TxnID
     existing_invoice_id = None
     if qb_invoice_data.get("qb_txn_id"):
-        logger.info(f"Searching for existing Odoo invoice with x_qb_txn_id: {qb_invoice_data.get('qb_txn_id')}")
         existing_invoices = _odoo_rpc_call(
             model="account.move",
             method="search_read",
@@ -1161,58 +1068,33 @@ def create_or_update_odoo_invoice(qb_invoice_data: Dict[str, Any]) -> Optional[i
         )
         if existing_invoices:
             existing_invoice_id = existing_invoices[0]["id"]
-            logger.info(f"Found existing Odoo invoice ID: {existing_invoice_id} for QB TxnID: {qb_invoice_data.get('qb_txn_id')}")
-
     if existing_invoice_id:
-        update_payload = {k: v for k, v in odoo_invoice_payload.items() if k != "move_type"} # move_type cannot be changed
-
-        # For lines, to replace all:
+        update_payload = {k: v for k, v in odoo_invoice_payload.items() if k != "move_type"}
         if "invoice_line_ids" in update_payload:
             update_payload["invoice_line_ids"] = [(5, 0, 0)] + invoice_lines_for_odoo
-
-        logger.info(f"Attempting to update Odoo invoice ID: {existing_invoice_id}")
-        logger.debug(f"Odoo Invoice Update Payload: {update_payload}")
         success = _odoo_rpc_call(
             model="account.move",
             method="write",
             args_list=[[existing_invoice_id], update_payload]
         )
         if success:
-            logger.info(f"Successfully updated Odoo invoice ID: {existing_invoice_id}")
-            # Optionally, re-post the invoice if its state changed to 'draft'
-            # current_state = _odoo_rpc_call("account.move", "read", args=[existing_invoice_id], kwargs_rpc={"fields": ["state"]})
-            # if current_state and current_state[0]['state'] == 'draft':
-            #    _odoo_rpc_call(model="account.move", method="action_post", args=[[existing_invoice_id]])
-            #    logger.info(f"Posted updated invoice {existing_invoice_id}")
+            logger.info(f"Updated Odoo invoice ID: {existing_invoice_id}")
             return existing_invoice_id
         else:
             logger.error(f"Failed to update Odoo invoice ID: {existing_invoice_id}")
             return None
     else:
-        # Create new invoice
-        logger.info("Attempting to create new Odoo invoice.")
-        logger.debug(f"Odoo Invoice Create Payload: {odoo_invoice_payload}")
-
-        # Check if there are any lines, as Odoo might require lines for an invoice
-        if not invoice_lines_for_odoo and qb_invoice_data.get("lines"): # If QB had lines but we processed none
-            logger.error(f"No processable lines for new QB Invoice Ref {qb_invoice_data.get('ref_number')}. Creation aborted.")
-            return None
-        if not odoo_invoice_payload.get("invoice_line_ids"): # If payload has no lines at all
-            logger.warning(f"Creating invoice {qb_invoice_data.get('ref_number')} with no lines. Odoo may reject this.")
-
         new_invoice_id = _odoo_rpc_call(
             model="account.move",
             method="create",
             args_list=[odoo_invoice_payload]
         )
         if new_invoice_id:
-            logger.info(f"Successfully created Odoo invoice with ID: {new_invoice_id} for QB TxnID: {qb_invoice_data.get('qb_txn_id')}")
-            # Post the newly created invoice
+            logger.info(f"Created Odoo invoice with ID: {new_invoice_id}")
             _odoo_rpc_call(model="account.move", method="action_post", args=[[new_invoice_id]])
-            logger.info(f"Posted newly created invoice {new_invoice_id}")
             return new_invoice_id
         else:
-            logger.error(f"Failed to create Odoo invoice for QB Ref: {qb_invoice_data.get('ref_number')}")
+            logger.error("Failed to create Odoo invoice.")
             return None
 
 def create_or_update_odoo_payment(qb_payment_data: Dict[str, Any]) -> Optional[int]:
