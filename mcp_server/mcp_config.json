@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "qb-odoo-sync": {
+      "command": "python",
+      "args": ["c:\\SD Code Files\\QB Odoo Sync\\QB_to_Odoo_Sync\\mcp_server\\server.py"],
+      "env": {
+        "PYTHONPATH": "c:\\SD Code Files\\QB Odoo Sync\\QB_to_Odoo_Sync\\qb_odoo_sync_project"
+      }
+    }
+  }
+}
