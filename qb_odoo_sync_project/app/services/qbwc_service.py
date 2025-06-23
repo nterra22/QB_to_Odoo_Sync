@@ -735,7 +735,7 @@ class QBWCService(ServiceBase):
                     save_qbwc_session_state()
                     return ""
 
-                xml_request = build_customer_add_qbxml(customer_details)
+                xml_request = build_customer_add_qbxml(customer_details, qbxml_version=session_data.get('qbxml_version', '13.0'))
                 current_task["state"] = "AWAIT_CUSTOMER_ADD"
                 save_qbwc_session_state()
                 return xml_request
@@ -792,7 +792,7 @@ class QBWCService(ServiceBase):
                     save_qbwc_session_state()
                     return ""
 
-                xml_request = build_item_add_qbxml(item_details)
+                xml_request = build_item_add_qbxml(item_details, qbxml_version=session_data.get('qbxml_version', '13.0'))
                 current_task["state"] = "AWAIT_ITEM_ADD"
                 save_qbwc_session_state()
                 return xml_request
@@ -800,7 +800,7 @@ class QBWCService(ServiceBase):
             if current_task.get("state") == "ADD_INVOICE":
                 logger.info("All prerequisites met. Building InvoiceAddRq.")
                 invoice_data = current_task["current_invoice_data"]
-                xml_request = build_invoice_add_qbxml(invoice_data)
+                xml_request = build_invoice_add_qbxml(invoice_data, qbxml_version=session_data.get('qbxml_version', '13.0'))
                 current_task["state"] = "AWAIT_INVOICE_ADD"
                 save_qbwc_session_state()
                 return xml_request
