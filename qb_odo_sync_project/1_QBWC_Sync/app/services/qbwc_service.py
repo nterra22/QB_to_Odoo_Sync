@@ -1,15 +1,13 @@
-from odoo import http
-from odoo.http import request
 import logging
 import os
 import xml.etree.ElementTree as ET
 import json
 from spyne import rpc, ServiceBase
 from spyne.protocol.soap import Soap11
-from spyne.protocol.qbxml import QBXMLMessage
+# from spyne.protocol.qbxml import QBXMLMessage
 from spyne.model.primitive import Unicode, Integer
 from spyne.model.complex import Array, ComplexModel
-from spyne.protocol.qbxml import QBXML
+# from spyne.protocol.qbxml import QBXML
 
 _logger = logging.getLogger(__name__)
 
@@ -142,20 +140,30 @@ class QBWCService(ServiceBase):
 
         # After processing response, update iterator state
         session_state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'qbwc_session_state.json')
+        iteratorRemainingCount = 0
         try:
             response_root = ET.fromstring(response)
             query_rs = response_root.find('.//ItemInventoryQueryRs')
             iteratorID = None
-            iteratorRemainingCount = 0
             if query_rs is not None:
                 iteratorID = query_rs.get('iteratorID')
                 iteratorRemainingCount = int(query_rs.get('iteratorRemainingCount', '0'))
+            # Reset iteratorID if done
+            if not iteratorID or iteratorRemainingCount == 0:
+                iteratorID = None
+                iteratorRemainingCount = 0
             with open(session_state_path, 'w') as f:
                 json.dump({"iteratorID": iteratorID, "iteratorRemainingCount": iteratorRemainingCount}, f)
         except Exception as e:
             _logger.error(f"Failed to update iterator state: {e}", exc_info=True)
 
-        return 100
+        # Return 0 if more work, 100 if done
+        if iteratorRemainingCount > 0:
+            _logger.info(f"More inventory to fetch, iteratorRemainingCount={iteratorRemainingCount}. Returning 0 to QBWC.")
+            return 0
+        else:
+            _logger.info("All inventory fetched. Returning 100 to QBWC.")
+            return 100
 
     @rpc(Unicode, _returns=Unicode)
     def getLastError(self, ticket):
