@@ -3,6 +3,7 @@ from odoo.http import request
 import logging
 import os
 import xml.etree.ElementTree as ET
+import json
 from spyne import rpc, ServiceBase
 from spyne.protocol.soap import Soap11
 from spyne.protocol.qbxml import QBXMLMessage
@@ -17,93 +18,23 @@ class QBWCService(ServiceBase):
     def sendRequestXML(self, ticket, db, username, password):
         _logger.info("QBWC sendRequestXML called")
         qbxml_requests = []
-        
-        # For each XML item that has no ListID, generate an add request
-        for item in root.findall('.//ItemInventoryRet'):
-            list_id = item.findtext('ListID')
-            if not list_id or not list_id.strip():
-                name = item.findtext('Name')
-                if not name:
-                    _logger.warning("Skipping item with no Name.")
-                    continue
-
-                add_request_parts = [f"<Name>{name}</Name>"]
-                if item.findtext('IsActive') is not None:
-                    add_request_parts.append(f"<IsActive>{item.findtext('IsActive')}</IsActive>")
-                
-                parent_ref_name = item.findtext('./ParentRef/FullName')
-                if parent_ref_name:
-                    add_request_parts.append(f"<ParentRef><FullName>{parent_ref_name}</FullName></ParentRef>")
-
-                if item.findtext('SalesDesc') is not None:
-                    add_request_parts.append(f"<SalesDesc>{item.findtext('SalesDesc')}</SalesDesc>")
-                
-                if item.findtext('SalesPrice') is not None:
-                    add_request_parts.append(f"<SalesPrice>{item.findtext('SalesPrice')}</SalesPrice>")
-
-                income_account = item.findtext('./IncomeAccountRef/FullName') or 'Merchandise Sales'
-                add_request_parts.append(f"<IncomeAccountRef><FullName>{income_account}</FullName></IncomeAccountRef>")
-
-                if item.findtext('PurchaseDesc') is not None:
-                    add_request_parts.append(f"<PurchaseDesc>{item.findtext('PurchaseDesc')}</PurchaseDesc>")
-
-                if item.findtext('PurchaseCost') is not None:
-                    add_request_parts.append(f"<PurchaseCost>{item.findtext('PurchaseCost')}</PurchaseCost>")
-
-                cogs_account = item.findtext('./COGSAccountRef/FullName') or 'Cost of Goods Sold'
-                add_request_parts.append(f"<COGSAccountRef><FullName>{cogs_account}</FullName></COGSAccountRef>")
-
-                asset_account = item.findtext('./AssetAccountRef/FullName') or 'Inventory Asset'
-                add_request_parts.append(f"<AssetAccountRef><FullName>{asset_account}</FullName></AssetAccountRef>")
-
-                if item.findtext('ManufacturerPartNumber') is not None:
-                    add_request_parts.append(f"<ManufacturerPartNumber>{item.findtext('ManufacturerPartNumber')}</ManufacturerPartNumber>")
-
-                add_body = "\n        ".join(add_request_parts)
-                add_request = f"""<ItemInventoryAddRq>
-    <ItemInventoryAdd>
-        {add_body}
-    </ItemInventoryAdd>
-</ItemInventoryAddRq>"""
-                _logger.info(f"Generated ItemInventoryAddRq: {add_request}")
-                qbxml_requests.append(add_request)
-
-        # Compare items and generate modification requests
-        if qb_items:
-            for qb_item in qb_items:
-                list_id = qb_item.findtext('ListID')
-                xml_item = next((item for item in root.findall('.//ItemInventoryRet') if item.findtext('ListID') == list_id), None)
-                
-                if xml_item is not None:
-                    # Existing item, check for modifications
-                    mod_request_parts = []
-                    for field in ['Name', 'IsActive', 'SalesDesc', 'SalesPrice', 'PurchaseDesc', 'PurchaseCost', 'ManufacturerPartNumber']:
-                        qb_value = qb_item.findtext(field)
-                        xml_value = xml_item.findtext(field)
-                        _logger.info(f"Comparing field '{field}': QB='{qb_value}' XML='{xml_value}'")
-                        if qb_value != xml_value:
-                            if xml_value is not None:
-                                mod_request_parts.append(f"<{field}>{xml_value}</{field}>")
-                            else:
-                                mod_request_parts.append(f"<{field}></{field}>")  # Clear the field if XML value is None
-
-                    if mod_request_parts:
-                        mod_body = "\n        ".join(mod_request_parts)
-                        mod_request = f"""<ItemInventoryModRq>
-    <ItemInventoryMod>
-        <ListID>{list_id}</ListID>
-        {mod_body}
-    </ItemInventoryMod>
-</ItemInventoryModRq>"""
-                        _logger.info(f"Generated ItemInventoryModRq: {mod_request}")
-                        qbxml_requests.append(mod_request)
-
-        if not qbxml_requests:
-            _logger.info("No new or modified items to send to QB. Sending ItemInventoryQueryRq.")
-            qbxml = """<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<?qbxml version=\"13.0\"?>\n<QBXML>\n    <QBXMLMsgsRq onError=\"stopOnError\">\n        <ItemInventoryQueryRq requestID=\"1\">\n            <MaxReturned>100</MaxReturned>\n        </ItemInventoryQueryRq>\n    </QBXMLMsgsRq>\n</QBXML>\n"""
+        session_state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'qbwc_session_state.json')
+        if os.path.exists(session_state_path):
+            with open(session_state_path, 'r') as f:
+                session_state = json.load(f)
         else:
-            requests = "\n        ".join(qbxml_requests)
-            qbxml = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="13.0"?>\n<QBXML>\n    <QBXMLMsgsRq onError="stopOnError">\n        {requests}\n    </QBXMLMsgsRq>\n</QBXML>\n'''
+            session_state = {"iteratorID": None, "iteratorRemainingCount": 0}
+
+        iteratorID = session_state.get("iteratorID")
+        iteratorRemainingCount = session_state.get("iteratorRemainingCount", 0)
+
+        if iteratorID and iteratorRemainingCount > 0:
+            qbxml = f'''<?xml version="1.0" encoding="utf-8"?>\n<?qbxml version="13.0"?>\n<QBXML>\n    <QBXMLMsgsRq onError="stopOnError">\n        <ItemInventoryQueryRq requestID="1" iterator="Continue" iteratorID="{iteratorID}">\n            <MaxReturned>100</MaxReturned>\n        </ItemInventoryQueryRq>\n    </QBXMLMsgsRq>\n</QBXML>\n'''
+            _logger.info(f"Continuing inventory query with iteratorID={iteratorID}, remaining={iteratorRemainingCount}")
+            return qbxml
+        else:
+            qbxml = """<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<?qbxml version=\"13.0\"?>\n<QBXML>\n    <QBXMLMsgsRq onError=\"stopOnError\">\n        <ItemInventoryQueryRq requestID=\"1\" iterator=\"Start\">\n            <MaxReturned>100</MaxReturned>\n        </ItemInventoryQueryRq>\n    </QBXMLMsgsRq>\n</QBXML>\n"""
+            _logger.info("Starting new inventory query with iterator=Start")
             return qbxml
 
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Integer)
@@ -208,6 +139,22 @@ class QBWCService(ServiceBase):
         except Exception as e:
             _logger.error(f"Failed to process QB response: {e}", exc_info=True)
             return -1
+
+        # After processing response, update iterator state
+        session_state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'qbwc_session_state.json')
+        try:
+            response_root = ET.fromstring(response)
+            query_rs = response_root.find('.//ItemInventoryQueryRs')
+            iteratorID = None
+            iteratorRemainingCount = 0
+            if query_rs is not None:
+                iteratorID = query_rs.get('iteratorID')
+                iteratorRemainingCount = int(query_rs.get('iteratorRemainingCount', '0'))
+            with open(session_state_path, 'w') as f:
+                json.dump({"iteratorID": iteratorID, "iteratorRemainingCount": iteratorRemainingCount}, f)
+        except Exception as e:
+            _logger.error(f"Failed to update iterator state: {e}", exc_info=True)
+
         return 100
 
     @rpc(Unicode, _returns=Unicode)
