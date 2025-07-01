@@ -12,7 +12,7 @@ Build a robust two-way sync system between QuickBooks Desktop and Odoo for produ
 <!-- - **Task:** Create project roadmap. -->
 <!-- - **Done:** Roadmap file exists at repo root with clear steps. -->
 <!-- - **Test:** Open `sync_roadmap.md` and verify content. -->
-- ** Task: ** Extract all inventory from Odoo into XML
+<!-- - ** Task: ** Extract all inventory from Odoo into XML -->
 - ** Task: ** Export all inventory from Quickbooks and have AI update XML with prices etc...
 - ** Task: ** Export XML inventory changes back to Odoo
 
