@@ -82,7 +82,8 @@ class QBWCService(ServiceBase):
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         logger.info("QBWC sendRequestXML called for two-way sync.")
         import xml.etree.ElementTree as ET
-        xml_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '2_SD_MASTER_DATABASE', 'inventory.xml')
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '2_SD_MASTER_DATABASE')
+        xml_file_path = os.path.join(output_dir, 'inventory.xml')
         xml_items = {}
         qb_items = {}
         qbxml_requests = []
@@ -172,7 +173,7 @@ class QBWCService(ServiceBase):
                 return 100
 
             logger.info(f"Received response from QB: {response[:1000]}...")
-            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '2_SD_MASTER_DATABASE')
+            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '2_SD_MASTER_DATABASE')
             output_file = os.path.join(output_dir, 'inventory.xml')
 
             # --- Refactored full sync logic: accumulate all items in memory, write XML at the end ---
