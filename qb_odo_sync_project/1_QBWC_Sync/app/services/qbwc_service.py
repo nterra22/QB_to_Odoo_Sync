@@ -82,7 +82,8 @@ class QBWCService(ServiceBase):
     def sendRequestXML(self, ticket, strHCPResponse, strCompanyFileName, qbXMLCountry, qbXMLMajorVers, qbXMLMinorVers):
         logger.info("QBWC sendRequestXML called for two-way sync.")
         import xml.etree.ElementTree as ET
-        xml_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '2_SD_MASTER_DATABASE', 'inventory.xml')
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '2_SD_MASTER_DATABASE')
+        xml_file_path = os.path.join(output_dir, 'inventory.xml')
         xml_items = {}
         qb_items = {}
         qbxml_requests = []
@@ -163,27 +164,27 @@ class QBWCService(ServiceBase):
     @rpc(Unicode, Unicode, Unicode, Unicode, _returns=Integer)
     def receiveResponseXML(self, ticket, response, hresult, message):
         logger.info("QBWC receiveResponseXML called")
-        if hresult:
-            logger.error(f"QBWC receiveResponseXML error. HRESULT: {hresult}, Message: {message}")
-            return -1
-        if not response:
-            logger.info("Empty response from QB, assuming session is done.")
-            return 100
-        
-        logger.info(f"Received response from QB: {response[:1000]}...")
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '2_SD_MASTER_DATABASE')
-        output_file = os.path.join(output_dir, 'inventory.xml')
-        
-        # --- Refactored full sync logic: accumulate all items in memory, write XML at the end ---
-        import json
-        session_state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'qbwc_session_state.json')
-        iteratorRemainingCount = 0
-        is_full_sync = False
-        # Use a class attribute to accumulate items in memory during a full sync
-        if not hasattr(self, '_fullsync_items'):
-            self._fullsync_items = None
-        
         try:
+            if hresult:
+                logger.error(f"QBWC receiveResponseXML error. HRESULT: {hresult}, Message: {message}")
+                return -1
+            if not response:
+                logger.info("Empty response from QB, assuming session is done.")
+                return 100
+
+            logger.info(f"Received response from QB: {response[:1000]}...")
+            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '2_SD_MASTER_DATABASE')
+            output_file = os.path.join(output_dir, 'inventory.xml')
+
+            # --- Refactored full sync logic: accumulate all items in memory, write XML at the end ---
+            import json
+            session_state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'qbwc_session_state.json')
+            iteratorRemainingCount = 0
+            is_full_sync = False
+            # Use a class attribute to accumulate items in memory during a full sync
+            if not hasattr(self, '_fullsync_items'):
+                self._fullsync_items = None
+
             response_root = ET.fromstring(response)
             query_rs = response_root.find('.//ItemInventoryQueryRs')
             iteratorID = None
@@ -198,11 +199,6 @@ class QBWCService(ServiceBase):
                 iteratorRemainingCount = 0
             with open(session_state_path, 'w') as f:
                 json.dump({"iteratorID": iteratorID, "iteratorRemainingCount": iteratorRemainingCount}, f)
-        except Exception as e:
-            logger.error(f"Failed to update iterator state: {e}", exc_info=True)
-
-        try:
-            response_root = ET.fromstring(response)
 
             if is_full_sync:
                 # Accumulate all items in memory (dict)

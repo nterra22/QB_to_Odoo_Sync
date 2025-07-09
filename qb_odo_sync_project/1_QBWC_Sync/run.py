@@ -39,7 +39,7 @@ def main():
         logger.info(f"Flask DEBUG mode: {FLASK_DEBUG}")
         logger.info("This service extracts QB inventory to PostgreSQL database")
         logger.info("=" * 60)
-        
+
         # Run the Flask development server
         flask_app.run(
             host=SERVER_HOST, 
