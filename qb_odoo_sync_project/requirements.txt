@@ -1,0 +1,21 @@
+# QuickBooks Odoo Sync Application Dependencies
+# Core web framework
+flask>=3.0.0
+
+# SOAP service framework  
+spyne>=2.14.0
+
+# XML processing
+lxml>=5.0.0
+
+# HTTP requests for Odoo API
+requests>=2.31.0
+
+# Python 2/3 compatibility (required by Spyne)
+six>=1.16.0
+
+# Development and debugging (optional)
+# Uncomment for development:
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=6.0.0
